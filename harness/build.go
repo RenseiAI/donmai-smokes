@@ -43,6 +43,19 @@ type BuildOptions struct {
 	Timeout time.Duration
 }
 
+// BuildAfBinary is a convenience wrapper around BuildBinary that fills in
+// the af-binary defaults (SourceDir="../agentfactory-tui",
+// EntryPoint="./cmd/af") so af-side smoke tests can build the binary in one
+// line. The OutputPath is required; pass filepath.Join(t.TempDir(), "af")
+// or similar. Other BuildOptions fields (Env, LogSink, Timeout) override
+// the defaults when set; SourceDir / EntryPoint cannot be overridden via
+// this wrapper — call BuildBinary directly for non-default builds.
+func BuildAfBinary(ctx context.Context, opts BuildOptions) (string, error) {
+	opts.SourceDir = "../agentfactory-tui"
+	opts.EntryPoint = "./cmd/af"
+	return BuildBinary(ctx, opts)
+}
+
 // BuildBinary compiles a Go binary via `go build -o <OutputPath> <EntryPoint>`
 // from BuildOptions.SourceDir and returns the absolute path of the produced
 // executable.
