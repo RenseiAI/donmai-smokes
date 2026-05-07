@@ -47,7 +47,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -66,39 +65,19 @@ func TestAfDaemonOperatorEndpointsHonestEndToEnd(t *testing.T) {
 		t.Skip("RENSEI_SMOKES_SKIP_LIVE_DAEMON=1 — operator opted out of the live-daemon smoke")
 	}
 
-	// Build af from the sibling agentfactory-tui checkout. Cold cache
-	// 60-90s; warm sub-second.
-	buildCtx, buildCancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer buildCancel()
-
-	binDir := t.TempDir()
-	afBinary, err := afh.BuildAfBinary(buildCtx, afh.BuildOptions{
-		OutputPath: filepath.Join(binDir, "af"),
-		Env:        append(os.Environ(), "GOWORK="),
-	})
-	if err != nil {
-		if strings.Contains(err.Error(), "resolve ../") ||
-			strings.Contains(err.Error(), "no such file") ||
-			strings.Contains(err.Error(), "executable file not found") {
-			t.Skipf("live-daemon af binary unavailable: %v", err)
-		}
-		t.Fatalf("build af binary: %v", err)
-	}
-
-	port, err := afh.PickFreePort()
-	if err != nil {
-		t.Fatalf("pick free port: %v", err)
-	}
-
-	daemonHome := t.TempDir()
-
 	// S4 setup — write a minimal-valid .kit.toml under a dedicated kit
 	// scan dir. The TOML schema mirrors 005-kit-manifest-spec.md; the
 	// fields the daemon actually reads to surface this kit on
 	// /api/daemon/kits are kit.id (required, drops the kit otherwise via
 	// kit_registry.go's "manifest missing kit.id" warn-and-skip),
 	// kit.name, kit.version. The api field is parsed but not validated.
-	kitDir := filepath.Join(daemonHome, "smoke-kits")
+	//
+	// We allocate the kit dir from a separate t.TempDir() so it can be
+	// interpolated into daemon.yaml BEFORE LiveDaemonWithConfig writes
+	// the file under the daemon's HOME and spawns the process. The
+	// path is absolute so it works regardless of where the daemon
+	// resolves $HOME.
+	kitDir := filepath.Join(t.TempDir(), "smoke-kits")
 	if err := os.MkdirAll(kitDir, 0o700); err != nil {
 		t.Fatalf("mkdir kit dir: %v", err)
 	}
@@ -115,14 +94,11 @@ description = "Fixture kit for TestAfDaemonOperatorEndpointsHonestEndToEnd."
 		t.Fatalf("write kit manifest: %v", err)
 	}
 
-	// Pre-write daemon.yaml under <HOME>/.rensei/daemon.yaml. Mirrors
-	// step4_af_agent_run_test.go's allowlist + orchestrator stub setup
-	// and adds the S4 kit.scanPaths block pointing at the kit dir above.
-	daemonYAMLDir := filepath.Join(daemonHome, ".rensei")
-	if err := os.MkdirAll(daemonYAMLDir, 0o700); err != nil {
-		t.Fatalf("mkdir daemon yaml dir: %v", err)
-	}
-	daemonYAMLPath := filepath.Join(daemonYAMLDir, "daemon.yaml")
+	// daemon.yaml mirrors step4_af_agent_run_test.go's allowlist +
+	// orchestrator stub setup and adds the S4 kit.scanPaths block
+	// pointing at the kit dir above. LiveDaemonWithConfig writes this
+	// under <home>/.rensei/daemon.yaml before spawn — LoadConfig reads
+	// it BEFORE the wizard fallback in daemon.Start.
 	daemonYAML := fmt.Sprintf(`apiVersion: rensei.dev/v1
 kind: LocalDaemon
 machine:
@@ -148,41 +124,8 @@ kit:
   scanPaths:
     - %s
 `, kitDir)
-	if err := os.WriteFile(daemonYAMLPath, []byte(daemonYAML), 0o600); err != nil {
-		t.Fatalf("write daemon.yaml: %v", err)
-	}
 
-	url := fmt.Sprintf("http://127.0.0.1:%d", port)
-	logBuf := afh.NewLogTail(64 * 1024)
-
-	startCtx, startCancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer startCancel()
-
-	live, err := afh.SpawnDaemon(startCtx, afh.SpawnOptions{
-		Binary: afBinary,
-		Args: []string{
-			"daemon", "run",
-			"--port", fmt.Sprintf("%d", port),
-			"--skip-wizard",
-		},
-		Env: []string{
-			"PATH=/usr/bin:/bin:/usr/sbin:/sbin",
-			"HOME=" + daemonHome,
-			"XDG_CONFIG_HOME=" + filepath.Join(daemonHome, ".config"),
-			"RENSEI_DAEMON_FORCE_STUB=1",
-			"RENSEI_LOG_DIR=" + filepath.Join(daemonHome, ".rensei", "logs"),
-			"NO_COLOR=1",
-		},
-		HomeDir:        daemonHome,
-		LogSink:        logBuf,
-		HealthzBaseURL: url,
-		HealthzTimeout: 30 * time.Second,
-	})
-	if err != nil {
-		t.Fatalf("spawn af daemon: %v\n--- daemon log tail ---\n%s", err, logBuf.String())
-	}
-	t.Cleanup(live.Stop)
-	t.Logf("af daemon up at %s (pid %d, port %d)", live.URL, live.Cmd.Process.Pid, live.Port())
+	live, _, logBuf, _ := afh.LiveDaemonWithConfig(t, daemonYAML)
 
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 
