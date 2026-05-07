@@ -98,20 +98,11 @@ func setupLiveDaemon(t *testing.T) (live *afh.LiveDaemon, afBinary string, logBu
 		t.Fatalf("spawn af daemon: %v\n--- daemon log tail ---\n%s", err, logBuf.String())
 	}
 
-	// Idempotent stop wrapper. Tests that exercise the graceful-shutdown
-	// path explicitly (e.g. TestAfDaemonLifecycle's graceful_shutdown
-	// subtest) call live.Stop themselves; this Cleanup must not double-
-	// invoke Wait on the same exec.Cmd. The boolean guard is plain test-
-	// goroutine sequential — no concurrent stop callers expected.
-	stopped := false
-	originalStop := live.Stop
-	live.Stop = func() {
-		if stopped {
-			return
-		}
-		stopped = true
-		originalStop()
-	}
+	// LiveDaemon.Stop is idempotent (Wave 11 Phase 7a — `sync.Once`-guarded
+	// inside the harness package). Tests that exercise the graceful-
+	// shutdown path explicitly (e.g. TestAfDaemonLifecycle's
+	// graceful_shutdown subtest) call live.Stop themselves; this Cleanup
+	// can call it again without double-invoking Wait on the same exec.Cmd.
 	t.Cleanup(live.Stop)
 	t.Logf("af daemon up at %s (pid %d)", live.URL, live.Cmd.Process.Pid)
 

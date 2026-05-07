@@ -6,6 +6,7 @@ import (
 	"io"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -55,6 +56,11 @@ type SpawnOptions struct {
 
 // LiveDaemon wraps a spawned daemon child process under harness control.
 // Callers MUST call Stop (typically via defer) to clean up the subprocess.
+//
+// Stop is idempotent: the first call performs the actual SIGTERM/wait/SIGKILL
+// sequence; subsequent calls are no-ops. This lets test code call Stop
+// explicitly (e.g. for graceful-shutdown subtests) AND register it via
+// t.Cleanup without a hand-rolled boolean guard.
 type LiveDaemon struct {
 	// Cmd is the exec.Cmd handle for the running daemon process.
 	Cmd *exec.Cmd
@@ -63,9 +69,25 @@ type LiveDaemon struct {
 	// SpawnOptions.HealthzBaseURL).
 	URL string
 
-	// Stop sends SIGTERM and waits up to StopGraceTimeout for a graceful
-	// exit, then SIGKILLs if the process is still running.
-	Stop func()
+	// stopOnce guards the actual stop sequence so Stop is safe to call
+	// multiple times; subsequent calls return without side effects.
+	stopOnce sync.Once
+
+	// stopFn performs the underlying SIGTERM/wait/SIGKILL. Captured at
+	// construction; invoked exactly once via stopOnce.Do.
+	stopFn func()
+}
+
+// Stop sends SIGTERM and waits up to StopGraceTimeout for a graceful exit,
+// then SIGKILLs if the process is still running. Safe to call multiple
+// times; only the first call performs the underlying stop sequence,
+// subsequent calls are no-ops.
+func (d *LiveDaemon) Stop() {
+	d.stopOnce.Do(func() {
+		if d.stopFn != nil {
+			d.stopFn()
+		}
+	})
 }
 
 // SpawnDaemon spawns a daemon child process per the supplied SpawnOptions
@@ -131,7 +153,7 @@ func SpawnDaemon(ctx context.Context, opts SpawnOptions) (*LiveDaemon, error) {
 		return nil, fmt.Errorf("start daemon binary %s: %w", opts.Binary, err)
 	}
 
-	stop := func() {
+	stopFn := func() {
 		if cmd.Process != nil {
 			_ = cmd.Process.Signal(syscall.SIGTERM)
 		}
@@ -151,13 +173,15 @@ func SpawnDaemon(ctx context.Context, opts SpawnOptions) (*LiveDaemon, error) {
 	healthCtx, healthCancel := context.WithTimeout(ctx, healthzTimeout)
 	defer healthCancel()
 	if err := WaitForDaemonHealthz(healthCtx, opts.HealthzBaseURL); err != nil {
-		stop()
+		// One-shot stop on the failure path; the LiveDaemon never escapes
+		// to a caller, so no idempotency wrapper is needed here.
+		stopFn()
 		return nil, fmt.Errorf("daemon /healthz never returned 200: %w", err)
 	}
 
 	return &LiveDaemon{
-		Cmd:  cmd,
-		URL:  opts.HealthzBaseURL,
-		Stop: stop,
+		Cmd:    cmd,
+		URL:    opts.HealthzBaseURL,
+		stopFn: stopFn,
 	}, nil
 }
