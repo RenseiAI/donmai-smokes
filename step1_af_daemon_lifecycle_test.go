@@ -56,10 +56,10 @@ func TestAfDaemonLifecycle(t *testing.T) {
 
 	live, afBinary, logBuf := setupLiveDaemon(t)
 
-	// The daemon's bind port is encoded in live.URL as
-	// http://127.0.0.1:<port>. We need it both as a flag and to verify
-	// release after SIGTERM.
-	port := portFromURL(t, live.URL)
+	// LiveDaemon.Port (Wave 11 Phase 7a) returns the bound port directly,
+	// parsed once at construction. We need it both as a flag and to
+	// verify release after SIGTERM.
+	port := live.Port()
 	hostFlag := "--host=127.0.0.1"
 	portFlag := fmt.Sprintf("--port=%d", port)
 
@@ -179,30 +179,6 @@ func TestAfDaemonLifecycle(t *testing.T) {
 			t.Errorf("daemon port %d still bound after Stop()", port)
 		}
 	})
-}
-
-// portFromURL parses the port out of a base URL of the form
-// "http://host:port". Used to pluck the daemon's bind port out of the
-// LiveDaemon.URL string for --port= flag construction and post-shutdown
-// release verification.
-func portFromURL(t *testing.T, url string) int {
-	t.Helper()
-	host := strings.TrimPrefix(url, "http://")
-	host = strings.TrimPrefix(host, "https://")
-	idx := strings.LastIndex(host, ":")
-	if idx < 0 {
-		t.Fatalf("portFromURL: no port in %q", url)
-	}
-	portStr := host[idx+1:]
-	// Strip any trailing path component the URL might carry.
-	if slash := strings.Index(portStr, "/"); slash >= 0 {
-		portStr = portStr[:slash]
-	}
-	var port int
-	if _, err := fmt.Sscanf(portStr, "%d", &port); err != nil || port <= 0 {
-		t.Fatalf("portFromURL: parse %q: %v", portStr, err)
-	}
-	return port
 }
 
 // probePortFree attempts a brief Listen/Close on 127.0.0.1:<port> to

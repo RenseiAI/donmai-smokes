@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/url"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -61,6 +63,10 @@ type SpawnOptions struct {
 // sequence; subsequent calls are no-ops. This lets test code call Stop
 // explicitly (e.g. for graceful-shutdown subtests) AND register it via
 // t.Cleanup without a hand-rolled boolean guard.
+//
+// Port reports the daemon's bound TCP port, parsed once from URL at
+// construction time. Consumers that previously parsed the port out of
+// URL by hand should call Port() instead.
 type LiveDaemon struct {
 	// Cmd is the exec.Cmd handle for the running daemon process.
 	Cmd *exec.Cmd
@@ -68,6 +74,10 @@ type LiveDaemon struct {
 	// URL is the base URL the daemon is bound to (matches
 	// SpawnOptions.HealthzBaseURL).
 	URL string
+
+	// port is parsed from URL at construction. Cached so Port() is a
+	// pure field read with no string-parsing on hot paths.
+	port int
 
 	// stopOnce guards the actual stop sequence so Stop is safe to call
 	// multiple times; subsequent calls return without side effects.
@@ -88,6 +98,14 @@ func (d *LiveDaemon) Stop() {
 			d.stopFn()
 		}
 	})
+}
+
+// Port returns the daemon's bound TCP port, parsed from URL at construction
+// time. Returns 0 if the URL did not encode a port (in practice unreachable
+// because SpawnDaemon validates HealthzBaseURL parses successfully before
+// returning a LiveDaemon).
+func (d *LiveDaemon) Port() int {
+	return d.port
 }
 
 // SpawnDaemon spawns a daemon child process per the supplied SpawnOptions
@@ -116,6 +134,15 @@ func SpawnDaemon(ctx context.Context, opts SpawnOptions) (*LiveDaemon, error) {
 	}
 	if opts.HealthzBaseURL == "" {
 		return nil, fmt.Errorf("SpawnDaemon: HealthzBaseURL is required")
+	}
+
+	// Parse the port out of HealthzBaseURL up front so we surface a clean
+	// error early rather than leaving Port() returning 0 silently. Any
+	// caller that supplied a malformed URL would already be broken
+	// downstream when /healthz dialed it.
+	port, err := portFromBaseURL(opts.HealthzBaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("SpawnDaemon: parse port from HealthzBaseURL: %w", err)
 	}
 
 	healthzTimeout := opts.HealthzTimeout
@@ -182,6 +209,29 @@ func SpawnDaemon(ctx context.Context, opts SpawnOptions) (*LiveDaemon, error) {
 	return &LiveDaemon{
 		Cmd:    cmd,
 		URL:    opts.HealthzBaseURL,
+		port:   port,
 		stopFn: stopFn,
 	}, nil
+}
+
+// portFromBaseURL parses the TCP port out of a base URL of the form
+// "http://host:port" or "https://host:port". Returns an error if the URL
+// is malformed or carries no port.
+func portFromBaseURL(baseURL string) (int, error) {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return 0, fmt.Errorf("parse %q: %w", baseURL, err)
+	}
+	portStr := u.Port()
+	if portStr == "" {
+		return 0, fmt.Errorf("URL %q has no port", baseURL)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return 0, fmt.Errorf("parse port %q: %w", portStr, err)
+	}
+	if port <= 0 || port > 65535 {
+		return 0, fmt.Errorf("port %d out of range", port)
+	}
+	return port, nil
 }
