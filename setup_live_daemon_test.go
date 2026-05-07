@@ -10,28 +10,24 @@ package smokes
 //     command surfaces (provider/kit/workarea/routing) against the
 //     /api/daemon/* HTTP control API.
 //
-// The helper builds the af binary, picks a free port, spawns the daemon
-// with isolated HOME + RENSEI_DAEMON_FORCE_STUB=1 (so the daemon does
-// NOT dial the platform on startup), waits for /healthz, and registers
-// a t.Cleanup that calls live.Stop on test exit. Returns the LiveDaemon,
-// the absolute af binary path, and the log tail buffer so callers can
-// attach trailing logs to assertion failures.
+// The helper is a thin in-package wrapper over the canonical
+// `harness.LiveDaemonWithConfig` helper. It exists for ergonomic
+// reasons — step1/step2 don't need a daemon.yaml (they exercise the
+// default-config path) and don't need the daemon's HOME directory back,
+// so this wrapper drops both arguments and matches the original Wave
+// 10 shape. Tests that need to pre-write daemon.yaml (step4, step5,
+// the Wave 12 acceptance smoke) call `harness.LiveDaemonWithConfig`
+// directly.
 
 import (
-	"context"
-	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
-	"time"
 
 	afh "github.com/RenseiAI/agentfactory-smokes/harness"
 )
 
 // setupLiveDaemon builds the af binary, spawns `af daemon run`
-// foreground on a free port with isolated HOME, and returns once
-// /healthz returns 200.
+// foreground on a free port with isolated HOME (no daemon.yaml), and
+// returns once /healthz returns 200.
 //
 // Skips the test cleanly when the agentfactory-tui sibling worktree or
 // Go toolchain isn't available (so the harness can run standalone for
@@ -40,71 +36,13 @@ import (
 // The returned afBinary path is absolute. The returned logBuf retains
 // the last 64 KiB of daemon stdout+stderr — callers should attach its
 // String() to any assertion failure that needs daemon-side context.
+//
+// For tests that need to pre-write daemon.yaml (project allowlists,
+// kit scan paths, trust-mode overrides, etc.), call
+// `harness.LiveDaemonWithConfig` directly — this in-package wrapper
+// only covers the default-config callers.
 func setupLiveDaemon(t *testing.T) (live *afh.LiveDaemon, afBinary string, logBuf *afh.LogTail) {
 	t.Helper()
-
-	// Build af from the sibling agentfactory-tui checkout. Cold cache
-	// 60-90s; warm sub-second. 3-minute parent context is generous.
-	buildCtx, buildCancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer buildCancel()
-
-	binDir := t.TempDir()
-	afBinary, err := afh.BuildAfBinary(buildCtx, afh.BuildOptions{
-		OutputPath: filepath.Join(binDir, "af"),
-		Env:        append(os.Environ(), "GOWORK="),
-	})
-	if err != nil {
-		if strings.Contains(err.Error(), "resolve ../") ||
-			strings.Contains(err.Error(), "no such file") ||
-			strings.Contains(err.Error(), "executable file not found") {
-			t.Skipf("live-daemon af binary unavailable: %v", err)
-		}
-		t.Fatalf("build af binary: %v", err)
-	}
-
-	port, err := afh.PickFreePort()
-	if err != nil {
-		t.Fatalf("pick free port: %v", err)
-	}
-
-	daemonHome := t.TempDir()
-	url := fmt.Sprintf("http://127.0.0.1:%d", port)
-	logBuf = afh.NewLogTail(64 * 1024)
-
-	startCtx, startCancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer startCancel()
-
-	live, err = afh.SpawnDaemon(startCtx, afh.SpawnOptions{
-		Binary: afBinary,
-		Args: []string{
-			"daemon", "run",
-			"--port", fmt.Sprintf("%d", port),
-			"--skip-wizard",
-		},
-		Env: []string{
-			"PATH=/usr/bin:/bin:/usr/sbin:/sbin",
-			"HOME=" + daemonHome,
-			"XDG_CONFIG_HOME=" + filepath.Join(daemonHome, ".config"),
-			"RENSEI_DAEMON_FORCE_STUB=1",
-			"RENSEI_LOG_DIR=" + filepath.Join(daemonHome, ".rensei", "logs"),
-			"NO_COLOR=1",
-		},
-		HomeDir:        daemonHome,
-		LogSink:        logBuf,
-		HealthzBaseURL: url,
-		HealthzTimeout: 30 * time.Second,
-	})
-	if err != nil {
-		t.Fatalf("spawn af daemon: %v\n--- daemon log tail ---\n%s", err, logBuf.String())
-	}
-
-	// LiveDaemon.Stop is idempotent (Wave 11 Phase 7a — `sync.Once`-guarded
-	// inside the harness package). Tests that exercise the graceful-
-	// shutdown path explicitly (e.g. TestAfDaemonLifecycle's
-	// graceful_shutdown subtest) call live.Stop themselves; this Cleanup
-	// can call it again without double-invoking Wait on the same exec.Cmd.
-	t.Cleanup(live.Stop)
-	t.Logf("af daemon up at %s (pid %d)", live.URL, live.Cmd.Process.Pid)
-
+	live, afBinary, logBuf, _ = afh.LiveDaemonWithConfig(t, "")
 	return live, afBinary, logBuf
 }
