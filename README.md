@@ -32,12 +32,31 @@ What does **not** live here: WorkOS auth, `rsk_*` tokens, Linear/GitHub orchestr
 
 ## Status
 
-**Wave 10 Phase 7 scaffolding.** Repo just stood up. The harness package + first smoke tests land in subsequent phases:
+**Wave 10 Phase 10 — first three af-only smokes landed.** The harness package (Phase 9) and the af-only smoke tests are in place. `TestAfAgentRunSmoke` is deferred per the Wave 10 plan and is not implemented in this wave.
 
-- **Phase 9** — extracts the OSS-pure harness primitives from `rensei-smokes` (the `daemon_detect.go` probe, `harness.go` build-binary + spawn-daemon helpers, `cleanup.go` subprocess teardown, `uid.go` unique-id helpers) into a new public Go package, e.g., `github.com/RenseiAI/agentfactory-smokes/harness`. After Phase 9 lands, `rensei-smokes` deletes its local copies and imports from this repo — same boundary discipline as `rensei-tui` → `agentfactory-tui`.
-- **Phase 10** — ports the `af`-only smoke tests into this repo: `TestAfDaemonLifecycle`, `TestAfDaemonCommandSurface`, `TestAfHelpDeprecationGuard`, and the deferred `TestAfAgentRunSmoke` candidate. See `runs/WAVE10_PLAN.md` § "Track Smokes" for the full migration list.
+## Tests
 
-**Reading order is TBD.** Once Phase 9 lands the harness package and Phase 10 lands the af-only smoke tests, this README's reading order will point at the relevant test files and `harness/` subpackages. Until then, treat `rensei-smokes`'s `README.md` as the operational reference for harness shape and step layout, noting that the platform-coupled steps (1's `rensei`/codesign vs `af`/codesign rename, 2's WorkOS/`rsk_` auth, 3-10's platform smokes) all belong on the platform side.
+Three live-daemon smokes ship at the top level of this repo. All three build the `af` binary from the sibling `agentfactory-tui` worktree, spawn a foreground `af daemon run` on a free port with isolated `HOME`, and exercise it.
+
+| Test file | What it pins |
+|---|---|
+| [`step1_af_daemon_lifecycle_test.go`](step1_af_daemon_lifecycle_test.go) | `TestAfDaemonLifecycle` — build → spawn → poll `/healthz` → exercise `af daemon status` + `af daemon stats` → `SIGTERM` → assert graceful exit + bind-port release. Foreground spawn only; service-unit install is deferred. |
+| [`step2_af_daemon_command_surface_test.go`](step2_af_daemon_command_surface_test.go) | `TestAfDaemonCommandSurface` — exercises the four migrated command surfaces (`af provider list`, `af kit list`, `af workarea list`, `af routing show --plain`) against the live `/api/daemon/*` HTTP control API. Mirrors `rensei-smokes`' `TestRenseiHostDaemonCommandSurface` from the af side. |
+| [`step3_af_help_deprecation_guard_test.go`](step3_af_help_deprecation_guard_test.go) | `TestAfHelpDeprecationGuard` — pins the Wave 9 verb shape on the af binary itself (top-level surface includes `provider`/`kit`/`workarea`/`routing`; per-surface subcommand sets match the v0.7.0 baseline). Self-pin counterpart to `rensei-smokes`' cross-binary mirror test. |
+
+Both `step1` and `step2` share build-and-spawn setup via [`setup_live_daemon_test.go`](setup_live_daemon_test.go).
+
+### Running
+
+```sh
+make test                                       # GOWORK=off go test -race ./...
+GOWORK=off go test -race ./... -timeout 8m      # explicit equivalent
+GOWORK=off go test -short ./...                 # skip live-daemon tests
+RENSEI_SMOKES_SKIP_LIVE_DAEMON=1 go test ./...  # opt out without -short
+make lint                                       # golangci-lint run ./...
+```
+
+The first build of `af` takes 60-90s on a cold cache; warm runs are sub-second. All three tests `t.Skip` cleanly when the agentfactory-tui sibling worktree or Go toolchain isn't available, so the harness can run standalone for CI flag-parsing checks.
 
 ## Conventions
 
