@@ -53,8 +53,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -76,50 +74,20 @@ func TestAfAgentRunSmoke(t *testing.T) {
 		t.Skip("RENSEI_SMOKES_SKIP_LIVE_DAEMON=1 — operator opted out of the live-daemon smoke")
 	}
 
-	// Build af from the sibling agentfactory-tui checkout. Cold cache
-	// 60-90s; warm sub-second.
-	buildCtx, buildCancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer buildCancel()
-
-	binDir := t.TempDir()
-	afBinary, err := afh.BuildAfBinary(buildCtx, afh.BuildOptions{
-		OutputPath: filepath.Join(binDir, "af"),
-		Env:        append(os.Environ(), "GOWORK="),
-	})
-	if err != nil {
-		if strings.Contains(err.Error(), "resolve ../") ||
-			strings.Contains(err.Error(), "no such file") ||
-			strings.Contains(err.Error(), "executable file not found") {
-			t.Skipf("live-daemon af binary unavailable: %v", err)
-		}
-		t.Fatalf("build af binary: %v", err)
-	}
-
-	port, err := afh.PickFreePort()
-	if err != nil {
-		t.Fatalf("pick free port: %v", err)
-	}
-
-	daemonHome := t.TempDir()
-
-	// Pre-write daemon.yaml under <HOME>/.rensei/daemon.yaml. This is
+	// Pre-baked daemon.yaml carrying a project allowlist entry. This is
 	// loaded BEFORE the wizard fallback in daemon.Start (LoadConfig
-	// returns the parsed file when present). Carrying a project
-	// allowlist entry is required because WorkerSpawner.AcceptWork
-	// rejects any SessionSpec whose Repository field doesn't match an
-	// allowlist entry's id / repository / URL-suffix.
+	// returns the parsed file when present). The allowlist entry is
+	// required because WorkerSpawner.AcceptWork rejects any SessionSpec
+	// whose Repository field doesn't match an allowlist entry's id /
+	// repository / URL-suffix.
 	//
 	// The values below are the minimum that pass validateConfig:
 	// machine.id + orchestrator.url + the allowlist entry's id +
 	// repository. orchestrator.url is set to a localhost loopback that
-	// can't actually be reached — RENSEI_DAEMON_FORCE_STUB=1 ensures
-	// the daemon's registration path takes the stub branch instead of
-	// dialing out, so this URL is never actually opened.
-	daemonYAMLDir := filepath.Join(daemonHome, ".rensei")
-	if err := os.MkdirAll(daemonYAMLDir, 0o700); err != nil {
-		t.Fatalf("mkdir daemon yaml dir: %v", err)
-	}
-	daemonYAMLPath := filepath.Join(daemonYAMLDir, "daemon.yaml")
+	// can't actually be reached — RENSEI_DAEMON_FORCE_STUB=1 (set by
+	// LiveDaemonWithConfig's hermetic env) ensures the daemon's
+	// registration path takes the stub branch instead of dialing out,
+	// so this URL is never actually opened.
 	const daemonYAML = `apiVersion: rensei.dev/v1
 kind: LocalDaemon
 machine:
@@ -142,41 +110,8 @@ autoUpdate:
   schedule: manual
   drainTimeoutSeconds: 5
 `
-	if err := os.WriteFile(daemonYAMLPath, []byte(daemonYAML), 0o600); err != nil {
-		t.Fatalf("write daemon.yaml: %v", err)
-	}
 
-	url := fmt.Sprintf("http://127.0.0.1:%d", port)
-	logBuf := afh.NewLogTail(64 * 1024)
-
-	startCtx, startCancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer startCancel()
-
-	live, err := afh.SpawnDaemon(startCtx, afh.SpawnOptions{
-		Binary: afBinary,
-		Args: []string{
-			"daemon", "run",
-			"--port", fmt.Sprintf("%d", port),
-			"--skip-wizard",
-		},
-		Env: []string{
-			"PATH=/usr/bin:/bin:/usr/sbin:/sbin",
-			"HOME=" + daemonHome,
-			"XDG_CONFIG_HOME=" + filepath.Join(daemonHome, ".config"),
-			"RENSEI_DAEMON_FORCE_STUB=1",
-			"RENSEI_LOG_DIR=" + filepath.Join(daemonHome, ".rensei", "logs"),
-			"NO_COLOR=1",
-		},
-		HomeDir:        daemonHome,
-		LogSink:        logBuf,
-		HealthzBaseURL: url,
-		HealthzTimeout: 30 * time.Second,
-	})
-	if err != nil {
-		t.Fatalf("spawn af daemon: %v\n--- daemon log tail ---\n%s", err, logBuf.String())
-	}
-	t.Cleanup(live.Stop)
-	t.Logf("af daemon up at %s (pid %d, port %d)", live.URL, live.Cmd.Process.Pid, live.Port())
+	live, _, logBuf, _ := afh.LiveDaemonWithConfig(t, daemonYAML)
 
 	// Inject a stub work item via POST /api/daemon/sessions. The
 	// SessionID embeds a millisecond stamp + the bound port for
