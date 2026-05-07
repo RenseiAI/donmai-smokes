@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"fmt"
+	"io"
 	"os/exec"
 	"path/filepath"
 	"syscall"
@@ -37,9 +38,7 @@ type SpawnOptions struct {
 	// Pass a *LogTail to retain the trailing N bytes for failure-mode
 	// diagnostics. If nil, daemon output is discarded — useful when the
 	// caller only cares about /healthz reaching 200.
-	LogSink interface { // io.Writer constraint, narrow to avoid stdlib import here
-		Write(p []byte) (n int, err error)
-	}
+	LogSink io.Writer
 
 	// HealthzBaseURL is the base URL SpawnDaemon polls /healthz against.
 	// Required (typically "http://127.0.0.1:<port>" using PickFreePort).
@@ -124,12 +123,8 @@ func SpawnDaemon(ctx context.Context, opts SpawnOptions) (*LiveDaemon, error) {
 	}
 
 	if opts.LogSink != nil {
-		cmd.Stdout = opts.LogSink.(interface { //nolint:forcetypeassert
-			Write(p []byte) (int, error)
-		})
-		cmd.Stderr = opts.LogSink.(interface { //nolint:forcetypeassert
-			Write(p []byte) (int, error)
-		})
+		cmd.Stdout = opts.LogSink
+		cmd.Stderr = opts.LogSink
 	}
 
 	if err := cmd.Start(); err != nil {
