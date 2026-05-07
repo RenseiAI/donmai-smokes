@@ -1,0 +1,27 @@
+# Build artifacts
+bin/
+/smoke
+/agentfactory-smokes
+dist/
+
+# Test / coverage artifacts
+coverage.out
+
+# env files
+.env
+.env.*
+!.env.example
+
+# agent state
+.agent/
+
+# go cache
+**/.gocache/
+**/go-build/
+**/.golangci-lint-cache/
+
+# subprocess noise (Wave 9 sidecar fix in rensei-smokes)
+nohup.out
+
+# macOS noise
+.DS_Store
