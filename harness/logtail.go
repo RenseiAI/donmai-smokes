@@ -54,8 +54,10 @@ func (b *LogTail) Write(p []byte) (int, error) {
 	}
 
 	// Slow path: ring write. Allocate the underlying array eagerly to
-	// cap if not yet there, then advance wPos with wrap-around.
-	if cap(b.data) < b.cap {
+	// full length (not just full cap) if not yet there, then advance
+	// wPos with wrap-around. The buffer must hold len == b.cap so
+	// indexed writes via copy(b.data, p[…]) actually populate bytes.
+	if len(b.data) < b.cap {
 		grown := make([]byte, b.cap)
 		copy(grown, b.data)
 		b.wPos = len(b.data)
