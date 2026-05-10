@@ -1,0 +1,47 @@
+name: test
+
+on:
+  pull_request:
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/test.yml"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: "go test (${{ matrix.os }})"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache: true
+          cache-dependency-path: go.mod
+
+      - name: go vet
+        run: go vet ./...
+
+      # Live-daemon tests (step1..step6 in the root package) skip cleanly
+      # when the sibling ../agentfactory-tui checkout is absent via
+      # harness.BuildBinary -> t.Skipf. Hosted runners don't have it,
+      # so those tests skip and the harness/* unit suite carries the run.
+      - name: go test
+        run: go test -v ./...
