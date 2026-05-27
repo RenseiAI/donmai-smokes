@@ -38,7 +38,7 @@ import (
 	"testing"
 	"time"
 
-	afh "github.com/RenseiAI/agentfactory-smokes/harness"
+	afh "github.com/RenseiAI/donmai-smokes/harness"
 )
 
 // TestAfDaemonLifecycle exercises the foreground daemon spawn / status /

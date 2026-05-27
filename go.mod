@@ -1,4 +1,4 @@
-module github.com/RenseiAI/agentfactory-smokes
+module github.com/RenseiAI/donmai-smokes
 
 go 1.23
 

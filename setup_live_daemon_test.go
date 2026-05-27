@@ -22,7 +22,7 @@ package smokes
 import (
 	"testing"
 
-	afh "github.com/RenseiAI/agentfactory-smokes/harness"
+	afh "github.com/RenseiAI/donmai-smokes/harness"
 )
 
 // setupLiveDaemon builds the af binary, spawns `af daemon run`

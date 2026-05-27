@@ -56,7 +56,7 @@ import (
 	"testing"
 	"time"
 
-	afh "github.com/RenseiAI/agentfactory-smokes/harness"
+	afh "github.com/RenseiAI/donmai-smokes/harness"
 )
 
 // TestAfAgentRunSmoke spins up a real `af daemon run`, injects a stub

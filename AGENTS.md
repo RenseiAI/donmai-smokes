@@ -2,7 +2,7 @@
 
 OSS-canonical smoke harness for the **AgentFactory `af` binary**.
 
-**Module**: `github.com/RenseiAI/agentfactory-smokes`
+**Module**: `github.com/RenseiAI/donmai-smokes`
 
 ## Purpose
 

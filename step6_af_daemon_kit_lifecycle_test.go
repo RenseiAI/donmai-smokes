@@ -70,7 +70,7 @@ import (
 	"testing"
 	"time"
 
-	afh "github.com/RenseiAI/agentfactory-smokes/harness"
+	afh "github.com/RenseiAI/donmai-smokes/harness"
 )
 
 // kitLifecycleManifestTOML is the minimal-valid kit manifest we install.

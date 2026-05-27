@@ -25,7 +25,7 @@ import (
 	"testing"
 	"time"
 
-	afh "github.com/RenseiAI/agentfactory-smokes/harness"
+	afh "github.com/RenseiAI/donmai-smokes/harness"
 )
 
 // TestAfDaemonCommandSurface exercises each of the four migrated

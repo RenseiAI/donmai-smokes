@@ -50,7 +50,7 @@ import (
 	"testing"
 	"time"
 
-	afh "github.com/RenseiAI/agentfactory-smokes/harness"
+	afh "github.com/RenseiAI/donmai-smokes/harness"
 )
 
 // TestAfDaemonOperatorEndpointsHonestEndToEnd is the Wave 11 customer-

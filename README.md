@@ -60,7 +60,7 @@ The first build of `af` takes 60-90s on a cold cache; warm runs are sub-second. 
 
 ## Conventions
 
-- **Module**: `github.com/RenseiAI/agentfactory-smokes`. Public, OSS-licensed.
+- **Module**: `github.com/RenseiAI/donmai-smokes`. Public, OSS-licensed.
 - **Module dep**: tracks `github.com/RenseiAI/agentfactory-tui` at v0.7.0 minimum (the Wave 9 release that locked the four daemon-targeted command surfaces and the `/api/daemon/*` HTTP control API).
 - **Go version**: 1.25.9 (matches `agentfactory-tui`).
 - **Testing**: stdlib `testing` + table-driven tests. No `testify`. `httptest` for HTTP fixtures. Same testing discipline as `agentfactory-tui` declares in its `AGENTS.md` § "Conventions".
