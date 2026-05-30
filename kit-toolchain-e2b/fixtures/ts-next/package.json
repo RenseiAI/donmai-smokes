@@ -1,0 +1,13 @@
+{
+  "name": "kit-toolchain-e2b-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Minimal TS fixture for the donmai kit-toolchain e2b proof. package.json presence is what the ts-next kit detects on.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node dist/index.js"
+  },
+  "devDependencies": {
+    "typescript": "5.4.5"
+  }
+}

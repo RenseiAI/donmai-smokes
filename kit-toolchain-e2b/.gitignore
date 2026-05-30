@@ -1,0 +1,5 @@
+# Isolated venv created by run.sh (e2b SDK + pinned protobuf).
+.venv/
+# Build output if a fixture is ever compiled locally.
+fixtures/ts-next/dist/
+fixtures/ts-next/node_modules/

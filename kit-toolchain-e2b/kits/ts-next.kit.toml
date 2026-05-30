@@ -1,0 +1,53 @@
+# ts-next.kit.toml — kit manifest for the K3/K4 cloud-sandbox toolchain proof.
+#
+# Uses the EXACT on-disk schema donmai's daemon KitRegistry parses
+# (donmai/daemon/kit_registry.go `kitManifestTOML`): [detect].files,
+# [provide.toolchain_install.<os>], [provide.hooks].post_acquire,
+# [composition].order. The proof driver (kit_toolchain_e2b.py) replicates
+# donmai's detect -> compose -> provision pipeline against this manifest and
+# runs the resulting commands inside a real e2b sandbox.
+#
+# It is a stand-alone manifest (not installed into ~/.donmai/kits) because
+# donmai does NOT ship a bundled TS/Next kit — kits are discovered from the
+# local registry / federation sources, none populated by default. Installing
+# this via `donmai kit install --source git ...` would make the real daemon
+# path pick it up; the proof keeps it local so it can run without mutating the
+# operator's daemon state.
+
+api = "v1"
+
+[kit]
+id = "ts-next"
+version = "0.1.0"
+name = "TypeScript / Next.js"
+description = "Node toolchain + npm dependency install for TS/Next repos"
+author = "donmai-smokes"
+priority = 100
+
+[supports]
+os = ["linux", "macos"]
+
+# Declarative detection (Phase-1 matchers donmai's detectMatches supports):
+# match when package.json exists at the repo root.
+[detect]
+files = ["package.json"]
+
+[composition]
+# foundation kits own the base toolchain layer and run first.
+order = "foundation"
+
+# Base-toolchain install, OS-keyed. The linux block is what a cloud (e2b)
+# sandbox runs. Refreshes apt + prereqs BEFORE the NodeSource repo, then
+# installs Node 20. A bare `apt-get install nodejs` exits non-zero on the e2b
+# base image (stale apt index) — verified empirically 2026-05-28. Keys are
+# arbitrary; donmai sorts them for determinism and runs each in order.
+[provide.toolchain_install.linux]
+node = "export DEBIAN_FRONTEND=noninteractive && apt-get update -y && apt-get install -y ca-certificates curl gnupg && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && apt-get install -y nodejs"
+
+[provide.toolchain_install.macos]
+node = "brew install node@20"
+
+# post_acquire runs AFTER toolchain_install and AFTER the repo is in place
+# (the kits pivot). Installs project dependencies.
+[provide.hooks]
+post_acquire = "npm ci --no-audit --no-fund || npm install --no-audit --no-fund"
