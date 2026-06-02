@@ -234,7 +234,21 @@ func TestAgentDispatchWithModelProfile(t *testing.T) {
 		}, "codex")
 	})
 
-	// ── Case 3: provider + model mismatch — provider wins (warn not reject) ──
+	// ── Case 3: explicit provider "gemini" ────────────────────────────────
+	t.Run("explicit provider gemini", func(t *testing.T) {
+		postAndCheck(t, dispatchPayload{
+			SessionID:  "dispatch-gemini-001",
+			Repository: "smoke-alpha",
+			Ref:        "main",
+			ModelProfile: &resolvedModelProfile{
+				Provider: "gemini",
+				Model:    "gemini-3.5-flash",
+				Tier:     "standard",
+			},
+		}, "gemini")
+	})
+
+	// ── Case 4: provider + model mismatch — provider wins (warn not reject) ──
 	t.Run("provider wins over mismatched model", func(t *testing.T) {
 		// Provider "claude" but model is a non-Claude string. The daemon
 		// must still accept and use "claude" as ChosenLLM — the model
@@ -250,7 +264,7 @@ func TestAgentDispatchWithModelProfile(t *testing.T) {
 		}, "claude")
 	})
 
-	// ── Case 4: nil ModelProfile — daemon falls back to default ("stub") ──
+	// ── Case 5: nil ModelProfile — daemon falls back to default ("stub") ──
 	t.Run("nil model profile falls back to default", func(t *testing.T) {
 		payload := dispatchPayload{
 			SessionID:  "dispatch-nomodel-001",
@@ -281,7 +295,7 @@ func TestAgentDispatchWithModelProfile(t *testing.T) {
 		t.Logf("fallback ChosenLLM = %q", ack.ChosenLLM)
 	})
 
-	// ── Case 5: dispatch without sessionId → 400 ──────────────────────────
+	// ── Case 6: dispatch without sessionId → 400 ──────────────────────────
 	t.Run("missing sessionId returns 400", func(t *testing.T) {
 		bad := `{"repository":"smoke-alpha","ref":"main"}`
 		resp, err := client.Post(srv.URL+"/api/daemon/sessions", "application/json",
