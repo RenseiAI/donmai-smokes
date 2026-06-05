@@ -89,7 +89,7 @@ func TestAfDaemonInstallLifecycle(t *testing.T) {
 	var servicePath string
 	switch runtime.GOOS {
 	case "darwin":
-		// installer/launchd/installer.go: LaunchdLabel = "dev.rensei.daemon"
+		// installer/launchd/installer.go: LaunchdLabel = "dev.donmai.daemon"
 		// PlistPath = $HOME/Library/LaunchAgents/<label>.plist
 		servicePath = filepath.Join(fakeHome, "Library", "LaunchAgents", "dev.donmai.daemon.plist")
 	case "linux":
