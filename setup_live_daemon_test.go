@@ -1,7 +1,7 @@
 package smokes
 
-// setup_live_daemon_test.go — shared test helper for af-binary smokes
-// that need a live `af daemon run` process under harness control.
+// setup_live_daemon_test.go — shared test helper for donmai-binary smokes
+// that need a live `donmai daemon run` process under harness control.
 //
 // Two callers today:
 //   - TestAfDaemonLifecycle (step1) — exercises status / stats and asserts
@@ -25,15 +25,15 @@ import (
 	afh "github.com/RenseiAI/donmai-smokes/harness"
 )
 
-// setupLiveDaemon builds the af binary, spawns `af daemon run`
+// setupLiveDaemon builds the donmai binary, spawns `donmai daemon run`
 // foreground on a free port with isolated HOME (no daemon.yaml), and
 // returns once /healthz returns 200.
 //
-// Skips the test cleanly when the agentfactory-tui sibling worktree or
+// Skips the test cleanly when the donmai sibling worktree or
 // Go toolchain isn't available (so the harness can run standalone for
 // CI flag-parsing checks).
 //
-// The returned afBinary path is absolute. The returned logBuf retains
+// The returned donmaiBinary path is absolute. The returned logBuf retains
 // the last 64 KiB of daemon stdout+stderr — callers should attach its
 // String() to any assertion failure that needs daemon-side context.
 //
@@ -41,8 +41,8 @@ import (
 // kit scan paths, trust-mode overrides, etc.), call
 // `harness.LiveDaemonWithConfig` directly — this in-package wrapper
 // only covers the default-config callers.
-func setupLiveDaemon(t *testing.T) (live *afh.LiveDaemon, afBinary string, logBuf *afh.LogTail) {
+func setupLiveDaemon(t *testing.T) (live *afh.LiveDaemon, donmaiBinary string, logBuf *afh.LogTail) {
 	t.Helper()
-	live, afBinary, logBuf, _ = afh.LiveDaemonWithConfig(t, "")
-	return live, afBinary, logBuf
+	live, donmaiBinary, logBuf, _ = afh.LiveDaemonWithConfig(t, "")
+	return live, donmaiBinary, logBuf
 }

@@ -23,8 +23,8 @@ type HermeticRunOptions struct {
 	HomeDir string
 
 	// DaemonURLEnvVar is the environment variable name the binary reads
-	// to discover the daemon's base URL (e.g. "RENSEI_DAEMON_URL" for
-	// rensei, "AF_DAEMON_URL" for the af binary). Required.
+	// to discover the daemon's base URL (e.g. "DONMAI_DAEMON_URL" for
+	// donmai). Required.
 	DaemonURLEnvVar string
 
 	// DaemonURL is the daemon's base URL (e.g. http://127.0.0.1:7734)

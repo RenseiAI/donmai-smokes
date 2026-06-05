@@ -97,7 +97,7 @@ description = "Fixture kit for TestAfDaemonOperatorEndpointsHonestEndToEnd."
 	// daemon.yaml mirrors step4_af_agent_run_test.go's allowlist +
 	// orchestrator stub setup and adds the S4 kit.scanPaths block
 	// pointing at the kit dir above. LiveDaemonWithConfig writes this
-	// under <home>/.rensei/daemon.yaml before spawn — LoadConfig reads
+	// under <home>/.donmai/daemon.yaml before spawn — LoadConfig reads
 	// it BEFORE the wizard fallback in daemon.Start.
 	daemonYAML := fmt.Sprintf(`apiVersion: rensei.dev/v1
 kind: LocalDaemon
@@ -157,7 +157,7 @@ kit:
 		// Decode the ListKitsResponse envelope. We only assert the load-
 		// bearing fields — the fake kit's id surfacing here is the proof
 		// that daemon.yaml's kit.scanPaths was consumed end-to-end (the
-		// default scan path ~/.rensei/kits doesn't exist under the
+		// default scan path ~/.donmai/kits doesn't exist under the
 		// hermetic HOME, so the only way this id appears is via the
 		// override).
 		var kitsResp struct {

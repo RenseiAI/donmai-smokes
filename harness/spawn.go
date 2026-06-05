@@ -16,7 +16,7 @@ import (
 // SpawnOptions configures SpawnDaemon.
 type SpawnOptions struct {
 	// Binary is the absolute path of the daemon-bearing executable
-	// (e.g. the result of BuildBinary on agentfactory-tui's ./cmd/af).
+	// (e.g. the result of BuildBinary on donmai's ./cmd/donmai).
 	// Required.
 	Binary string
 
@@ -27,7 +27,7 @@ type SpawnOptions struct {
 
 	// Env is the environment passed to the spawned process. If nil,
 	// SpawnDaemon supplies a hermetic default scoped to HomeDir.
-	// Callers wanting custom env (e.g. RENSEI_DAEMON_FORCE_STUB=1)
+	// Callers wanting custom env (e.g. DONMAI_DAEMON_FORCE_STUB=1)
 	// should build their own slice and pass it here.
 	Env []string
 
@@ -118,7 +118,7 @@ func (d *LiveDaemon) Port() int {
 //	XDG_CONFIG_HOME=<HomeDir>/.config
 //	NO_COLOR=1
 //
-// Callers needing custom env (RENSEI_DAEMON_FORCE_STUB=1, RENSEI_LOG_DIR=…,
+// Callers needing custom env (DONMAI_DAEMON_FORCE_STUB=1, DONMAI_STATE_HOME=…,
 // or any other daemon-specific knob) must construct the slice themselves
 // and pass it via Env.
 //
