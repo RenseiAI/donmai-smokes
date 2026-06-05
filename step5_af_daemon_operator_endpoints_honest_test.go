@@ -3,12 +3,12 @@ package smokes
 // step5_af_daemon_operator_endpoints_honest_test.go — customer-visible
 // Wave 11 acceptance criterion. Validates that the four daemon control
 // endpoints Wave 9 shipped now reflect real daemon state end-to-end,
-// configurable via daemon.yaml, against a real `af daemon` binary.
+// configurable via daemon.yaml, against a real `donmai daemon` binary.
 //
 // Per WAVE11_PLAN.md § "Phase 8 — Validation + acceptance" + Q5: the
 // explicit test name lands as drafted so future failures grep cleanly.
 //
-// What this exercises end-to-end against a real `af daemon run` process:
+// What this exercises end-to-end against a real `donmai daemon run` process:
 //
 //   1. S4 — daemon.yaml `kit.scanPaths` wire-up.
 //      A pre-written daemon.yaml carries `kit.scanPaths: [<temp-kit-dir>]`
@@ -31,12 +31,12 @@ package smokes
 //      SessionEventStarted listener fires synchronously and writes to the
 //      RoutingTraceStore the operator surface reads.
 //
-// Skip-mode: honours RENSEI_SMOKES_SKIP_LIVE_DAEMON=1 + -short, matching
+// Skip-mode: honours DONMAI_SMOKES_SKIP_LIVE_DAEMON=1 + -short, matching
 // step1-step4's pattern.
 //
 // Timing: warm cache ~2-3s (single live spin-up + three HTTP calls; the
 // build cache + healthz wait dominate). Cold cache adds 60-90s for the
-// af binary build.
+// donmai binary build.
 
 import (
 	"bytes"
@@ -54,15 +54,15 @@ import (
 )
 
 // TestAfDaemonOperatorEndpointsHonestEndToEnd is the Wave 11 customer-
-// visible acceptance criterion. Drives a single live `af daemon run`
+// visible acceptance criterion. Drives a single live `donmai daemon run`
 // through S4 (kit scan-paths), S5 (workarea live-pool view), and S6a
 // (routing decision recording) end-to-end.
 func TestAfDaemonOperatorEndpointsHonestEndToEnd(t *testing.T) {
 	if testing.Short() {
 		t.Skip("end-to-end live-daemon test; skipped under -short")
 	}
-	if os.Getenv("RENSEI_SMOKES_SKIP_LIVE_DAEMON") == "1" {
-		t.Skip("RENSEI_SMOKES_SKIP_LIVE_DAEMON=1 — operator opted out of the live-daemon smoke")
+	if os.Getenv("DONMAI_SMOKES_SKIP_LIVE_DAEMON") == "1" {
+		t.Skip("DONMAI_SMOKES_SKIP_LIVE_DAEMON=1 — operator opted out of the live-daemon smoke")
 	}
 
 	// S4 setup — write a minimal-valid .kit.toml under a dedicated kit
@@ -374,7 +374,7 @@ kit:
 		}
 
 		// Decode the RoutingExplainResponse. Per
-		// agentfactory-tui/afclient/routing_types.go:
+		// donmai/afclient/routing_types.go:
 		//   { sessionId, decision: { sessionId, chosenSandbox, chosenLLM, decidedAt },
 		//     trace: [ { step, phase, dimension, remaining, note } ] }
 		var explain struct {

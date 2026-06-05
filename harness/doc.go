@@ -1,11 +1,11 @@
-// Package harness is the OSS-public test harness for the AgentFactory `af`
+// Package harness is the OSS-public test harness for the Donmai `donmai`
 // binary.
 //
 // The harness provides reusable primitives for building, spawning, probing,
-// and exercising the `af` binary and its local daemon process — without any
-// dependency on the Rensei SaaS platform. It is consumed by:
+// and exercising the `donmai` binary and its local daemon process — without
+// any dependency on the Rensei SaaS platform. It is consumed by:
 //
-//   - agentfactory-smokes itself, which ships af-only smoke tests on top of
+//   - donmai-smokes itself, which ships donmai-only smoke tests on top of
 //     these primitives (Phase 10 onward).
 //   - rensei-smokes, which extends the harness with platform-specific smokes
 //     (WorkOS auth, Linear orchestration, on-demand sandbox provisioning,
@@ -15,10 +15,10 @@
 //
 //   - Runner — subprocess executor with dry-run, verbose, timeout, and
 //     binary-override support.
-//   - Build helpers — compile a fresh `af` (or sibling) binary from a
+//   - Build helpers — compile a fresh `donmai` (or sibling) binary from a
 //     workspace checkout for hermetic test runs.
-//   - Spawn helpers — boot an `af daemon run` child with isolated HOME and
-//     poll /healthz until ready.
+//   - Spawn helpers — boot a `donmai daemon run` child with isolated HOME
+//     and poll /healthz until ready.
 //   - Daemon-detect helpers — probe whether a daemon runtime is reachable
 //     (subcommand vs legacy binary vs absent).
 //   - Cleanup aggregation — run a sequence of teardown hooks and aggregate
@@ -27,17 +27,17 @@
 //     rensei-smokes step files because they have no platform coupling.
 //   - Help-output parsing — parse a Cobra `--help` Available Commands
 //     section, used both by rensei-smokes' help-mirror regression guard
-//     and by agentfactory-smokes' own help-deprecation guard.
+//     and by donmai-smokes' own help-deprecation guard.
 //
 // Stability:
 //
-// Once agentfactory-smokes ships its first tag, the exported surface here
+// Once donmai-smokes ships its first tag, the exported surface here
 // becomes the boundary contract between the OSS smoke layer and
 // rensei-smokes. Breaking changes follow the same semver discipline as
-// agentfactory-tui (see Wave 9 push order: v0.7.0 → v0.8.0 only with a
+// donmai (see Wave 9 push order: v0.7.0 → v0.8.0 only with a
 // migration note); additive changes are unrestricted.
 //
-// See agentfactory-smokes/AGENTS.md for the boundary discipline that
+// See donmai-smokes/AGENTS.md for the boundary discipline that
 // determines whether a candidate primitive belongs here or in
 // rensei-smokes.
 package harness

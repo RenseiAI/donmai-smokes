@@ -150,10 +150,10 @@ func TestPortFromBaseURL_Invalid(t *testing.T) {
 // TestSpawnDaemon_PortReflectsURL spawns a real subprocess wrapped as a
 // LiveDaemon-shaped object and verifies Port() matches what URL encodes
 // after a real /healthz wait. Uses a tiny in-process HTTP server posing
-// as a daemon so the test stays hermetic — no agentfactory-tui required.
+// as a daemon so the test stays hermetic — no donmai binary required.
 //
 // This guards against the "Port returns 0 because URL parse failed
-// silently" regression.
+// silently" regression (no donmai binary required — purely in-process).
 func TestSpawnDaemon_PortReflectsURL(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("subprocess SIGTERM semantics are POSIX-specific")
@@ -196,7 +196,7 @@ func TestSpawnDaemon_RejectsBadHealthzURL(t *testing.T) {
 	defer cancel()
 
 	// Use /usr/bin/true (or its equivalent) as the binary so we don't
-	// need agentfactory-tui to be present. The error must surface from
+	// need the donmai binary to be present. The error must surface from
 	// portFromBaseURL before we ever try to start the binary.
 	binary := "/usr/bin/true"
 	if _, err := exec.LookPath(binary); err != nil {

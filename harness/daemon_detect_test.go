@@ -7,15 +7,15 @@ import (
 	"testing"
 )
 
-// fakeAfOptions is the rensei-smokes-equivalent shape but binary-agnostic
-// — used here by the test code to fixture an "af" binary advertising
-// `af daemon run` so DaemonAvailable's subcommand probe matches.
-func fakeAfOptions() DaemonProbeOptions {
+// fakeDonmaiOptions is the rensei-smokes-equivalent shape but binary-agnostic
+// — used here by the test code to fixture a "donmai" binary advertising
+// `donmai daemon run` so DaemonAvailable's subcommand probe matches.
+func fakeDonmaiOptions() DaemonProbeOptions {
 	return DaemonProbeOptions{
-		Binary:         "af",
+		Binary:         "donmai",
 		SubcommandPath: []string{"daemon", "run"},
-		UsageMarker:    "af daemon run [",
-		// af today has no legacy standalone binary; LegacyBinary stays
+		UsageMarker:    "donmai daemon run [",
+		// donmai has no legacy standalone binary; LegacyBinary stays
 		// empty so the probe falls cleanly through to absent.
 	}
 }
@@ -31,21 +31,21 @@ func fakeRenseiOptions() DaemonProbeOptions {
 	}
 }
 
-// TestDaemonAvailable_SubcommandPresent_Af verifies DaemonAvailable
+// TestDaemonAvailable_SubcommandPresent_Donmai verifies DaemonAvailable
 // returns (true, DaemonModeSubcommand) when the binary's subcommand
-// probe matches the configured UsageMarker. Uses an "af" fixture to
+// probe matches the configured UsageMarker. Uses a "donmai" fixture to
 // exercise the parameterisation against a non-rensei spelling.
-func TestDaemonAvailable_SubcommandPresent_Af(t *testing.T) {
+func TestDaemonAvailable_SubcommandPresent_Donmai(t *testing.T) {
 	dir := t.TempDir()
 	WriteFakeBinaryAdvertisingSubcommand(t, dir, FakeBinarySubcommandFixture{
-		BinaryName:        "af",
+		BinaryName:        "donmai",
 		SubcommandPath:    []string{"daemon", "run"},
 		SubcommandPresent: true,
-		UsageMarker:       "af daemon run [",
+		UsageMarker:       "donmai daemon run [",
 	})
 	t.Setenv("PATH", dir)
 
-	present, mode := DaemonAvailable(fakeAfOptions())
+	present, mode := DaemonAvailable(fakeDonmaiOptions())
 	if !present {
 		t.Fatal("DaemonAvailable should report present when subcommand probe matches")
 	}
@@ -54,7 +54,7 @@ func TestDaemonAvailable_SubcommandPresent_Af(t *testing.T) {
 	}
 }
 
-// TestDaemonAvailable_SubcommandPresent_Rensei mirrors the af test using
+// TestDaemonAvailable_SubcommandPresent_Rensei mirrors the donmai test using
 // the rensei probe shape, confirming the same parameterisation works
 // for both spellings.
 func TestDaemonAvailable_SubcommandPresent_Rensei(t *testing.T) {
@@ -142,11 +142,11 @@ func TestDaemonAvailable_SubcommandTakesPrecedence(t *testing.T) {
 
 // TestDaemonAvailable_NoBinaryConfigured verifies that DaemonAvailable
 // returns absent when the configured Binary itself is missing from PATH
-// AND no LegacyBinary is configured (the af case where there's no
+// AND no LegacyBinary is configured (the donmai case where there's no
 // fallback).
 func TestDaemonAvailable_NoBinaryConfigured_NoLegacy(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
-	present, mode := DaemonAvailable(fakeAfOptions())
+	present, mode := DaemonAvailable(fakeDonmaiOptions())
 	if present {
 		t.Error("DaemonAvailable should report absent when Binary is missing and no LegacyBinary")
 	}
@@ -180,11 +180,11 @@ func TestDaemonModeLog(t *testing.T) {
 			needs: []string{"absent"},
 		},
 		{
-			// af shape: no LegacyBinary; absent log should still be
+			// donmai shape: no LegacyBinary; absent log should still be
 			// well-formed (no empty string in middle).
 			mode:  DaemonModeAbsent,
-			opts:  fakeAfOptions(),
-			needs: []string{"absent", "af daemon run"},
+			opts:  fakeDonmaiOptions(),
+			needs: []string{"absent", "donmai daemon run"},
 		},
 	}
 	for _, tc := range cases {

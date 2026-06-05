@@ -1,7 +1,7 @@
 # Build artifacts
 bin/
 /smoke
-/agentfactory-smokes
+/donmai-smokes
 dist/
 
 # Test / coverage artifacts

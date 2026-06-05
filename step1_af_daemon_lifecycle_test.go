@@ -1,20 +1,20 @@
 package smokes
 
 // step1_af_daemon_lifecycle_test.go — foreground daemon lifecycle smoke
-// for the `af daemon run` entry point.
+// for the `donmai daemon run` entry point.
 //
 // Per Wave 10 Phase 10 dispatch + Q6 resolution, this smoke covers ONLY
 // the foreground spawn path:
 //
-//   build af → spawn `af daemon run` foreground → wait for /healthz →
+//   build donmai → spawn `donmai daemon run` foreground → wait for /healthz →
 //   exercise daemon status / daemon stats → SIGTERM → wait for clean exit
 //
-// Service-unit install (`af daemon install` → launchd / systemd path) is
-// deferred to a follow-up wave. The af binary today (v0.7.0) advertises
+// Service-unit install (`donmai daemon install` → launchd / systemd path) is
+// deferred to a follow-up wave. The donmai binary today (v0.7.0) advertises
 // install/uninstall verbs but the smoke harness has no privileged-test
 // runner to actually load the unit and verify lifecycle through it.
 //
-// `af daemon --help` (v0.7.0) advertises the following verbs (Step 10.0
+// `donmai daemon --help` (v0.7.0) advertises the following verbs (Step 10.0
 // discovery, 2026-05-07):
 //
 //   doctor, drain, evict, install, logs, pause, resume, run, set, setup,
@@ -42,16 +42,16 @@ import (
 )
 
 // TestAfDaemonLifecycle exercises the foreground daemon spawn / status /
-// stats / SIGTERM cycle against a freshly-built af binary.
+// stats / SIGTERM cycle against a freshly-built donmai binary.
 //
-// Skipped under -short and when RENSEI_SMOKES_SKIP_LIVE_DAEMON=1 is set
+// Skipped under -short and when DONMAI_SMOKES_SKIP_LIVE_DAEMON=1 is set
 // (matching the rensei-smokes step11 pattern).
 func TestAfDaemonLifecycle(t *testing.T) {
 	if testing.Short() {
 		t.Skip("end-to-end live-daemon test; skipped under -short")
 	}
-	if os.Getenv("RENSEI_SMOKES_SKIP_LIVE_DAEMON") == "1" {
-		t.Skip("RENSEI_SMOKES_SKIP_LIVE_DAEMON=1 — operator opted out of the live-daemon smoke")
+	if os.Getenv("DONMAI_SMOKES_SKIP_LIVE_DAEMON") == "1" {
+		t.Skip("DONMAI_SMOKES_SKIP_LIVE_DAEMON=1 — operator opted out of the live-daemon smoke")
 	}
 
 	live, donmaiBinary, logBuf := setupLiveDaemon(t)
@@ -75,11 +75,11 @@ func TestAfDaemonLifecycle(t *testing.T) {
 			DaemonURL:       live.URL,
 		})
 		if err != nil {
-			t.Fatalf("af daemon status failed: %v\n--- output ---\n%s\n--- daemon log tail ---\n%s",
+			t.Fatalf("donmai daemon status failed: %v\n--- output ---\n%s\n--- daemon log tail ---\n%s",
 				err, out, logBuf.String())
 		}
 		if strings.TrimSpace(out) == "" {
-			t.Errorf("af daemon status produced empty output\n--- daemon log tail ---\n%s",
+			t.Errorf("donmai daemon status produced empty output\n--- daemon log tail ---\n%s",
 				logBuf.String())
 		}
 		afh.AssertOutputContainsAny(t, out, []string{
@@ -110,11 +110,11 @@ func TestAfDaemonLifecycle(t *testing.T) {
 			DaemonURL:       live.URL,
 		})
 		if err != nil {
-			t.Fatalf("af daemon stats failed: %v\n--- output ---\n%s\n--- daemon log tail ---\n%s",
+			t.Fatalf("donmai daemon stats failed: %v\n--- output ---\n%s\n--- daemon log tail ---\n%s",
 				err, out, logBuf.String())
 		}
 		if strings.TrimSpace(out) == "" {
-			t.Errorf("af daemon stats produced empty output\n--- daemon log tail ---\n%s",
+			t.Errorf("donmai daemon stats produced empty output\n--- daemon log tail ---\n%s",
 				logBuf.String())
 		}
 		afh.AssertOutputContainsAny(t, out, []string{

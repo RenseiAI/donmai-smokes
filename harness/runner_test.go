@@ -176,26 +176,26 @@ func TestRunner_WaitFor_Timeout(t *testing.T) {
 
 func TestRunner_ResolveBinary_Override(t *testing.T) {
 	r := NewRunner(RunnerConfig{
-		BinaryOverride:       "/tmp/custom/af",
+		BinaryOverride:       "/tmp/custom/donmai",
 		BinaryOverrideSource: "flag",
-		OverrideTarget:       "af",
+		OverrideTarget:       "donmai",
 	})
-	if got := r.resolveBinary("af"); got != "/tmp/custom/af" {
-		t.Errorf("resolveBinary(\"af\") with override = %q, want %q", got, "/tmp/custom/af")
+	if got := r.resolveBinary("donmai"); got != "/tmp/custom/donmai" {
+		t.Errorf("resolveBinary(\"donmai\") with override = %q, want %q", got, "/tmp/custom/donmai")
 	}
 }
 
 func TestRunner_ResolveBinary_PathDefault(t *testing.T) {
-	r := NewRunner(RunnerConfig{OverrideTarget: "af"})
-	if got := r.resolveBinary("af"); got != "af" {
-		t.Errorf("resolveBinary(\"af\") with empty override = %q, want %q", got, "af")
+	r := NewRunner(RunnerConfig{OverrideTarget: "donmai"})
+	if got := r.resolveBinary("donmai"); got != "donmai" {
+		t.Errorf("resolveBinary(\"donmai\") with empty override = %q, want %q", got, "donmai")
 	}
 }
 
 func TestRunner_ResolveBinary_NonTargetUnaffected(t *testing.T) {
 	r := NewRunner(RunnerConfig{
-		BinaryOverride: "/tmp/custom/af",
-		OverrideTarget: "af",
+		BinaryOverride: "/tmp/custom/donmai",
+		OverrideTarget: "donmai",
 	})
 	for _, name := range []string{"gh", "git", "codesign", "launchctl", "systemctl", "rensei-daemon"} {
 		if got := r.resolveBinary(name); got != name {
@@ -206,11 +206,11 @@ func TestRunner_ResolveBinary_NonTargetUnaffected(t *testing.T) {
 
 func TestRunner_InjectGlobalFlags_OnTarget(t *testing.T) {
 	r := NewRunner(RunnerConfig{
-		OverrideTarget: "af",
+		OverrideTarget: "donmai",
 		GlobalFlags:    []string{"--url", "http://127.0.0.1:7734"},
 	})
-	got := r.injectGlobalFlags([]string{"af", "provider", "list"})
-	want := []string{"af", "--url", "http://127.0.0.1:7734", "provider", "list"}
+	got := r.injectGlobalFlags([]string{"donmai", "provider", "list"})
+	want := []string{"donmai", "--url", "http://127.0.0.1:7734", "provider", "list"}
 	if len(got) != len(want) {
 		t.Fatalf("len: got %v, want %v", got, want)
 	}
@@ -223,7 +223,7 @@ func TestRunner_InjectGlobalFlags_OnTarget(t *testing.T) {
 
 func TestRunner_InjectGlobalFlags_NotTarget(t *testing.T) {
 	r := NewRunner(RunnerConfig{
-		OverrideTarget: "af",
+		OverrideTarget: "donmai",
 		GlobalFlags:    []string{"--url", "http://127.0.0.1:7734"},
 	})
 	got := r.injectGlobalFlags([]string{"git", "status"})
@@ -239,9 +239,9 @@ func TestRunner_InjectGlobalFlags_NotTarget(t *testing.T) {
 }
 
 func TestRunner_InjectGlobalFlags_NoFlags(t *testing.T) {
-	r := NewRunner(RunnerConfig{OverrideTarget: "af"})
-	got := r.injectGlobalFlags([]string{"af", "provider", "list"})
-	want := []string{"af", "provider", "list"}
+	r := NewRunner(RunnerConfig{OverrideTarget: "donmai"})
+	got := r.injectGlobalFlags([]string{"donmai", "provider", "list"})
+	want := []string{"donmai", "provider", "list"}
 	if len(got) != len(want) {
 		t.Fatalf("len: got %v, want %v", got, want)
 	}

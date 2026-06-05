@@ -33,8 +33,8 @@ import (
 )
 
 // agentCard is a minimal local copy of the daemon's AgentCard wire shape.
-// We don't import agentfactory-tui packages here (smoke boundary) — the
-// struct mirrors the JSON the daemon emits. Fields are kept deliberately
+// We don't import donmai packages here (smoke boundary) — the struct
+// mirrors the JSON the daemon emits. Fields are kept deliberately
 // narrow: only the ones the H-workType lane cares about.
 type agentCard struct {
 	ID       string `json:"id"`

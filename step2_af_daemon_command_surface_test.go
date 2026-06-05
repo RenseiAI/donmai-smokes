@@ -2,17 +2,17 @@ package smokes
 
 // step2_af_daemon_command_surface_test.go — live-daemon end-to-end smoke
 // for the four daemon-targeted command surfaces migrated to
-// agentfactory-tui in Wave 9 (ADR-2026-05-07-daemon-http-control-api.md).
+// donmai in Wave 9 (ADR-2026-05-07-daemon-http-control-api.md).
 //
-// This is the af-binary mirror of rensei-smokes' TestRenseiHostDaemonCommandSurface.
+// This is the donmai-binary mirror of rensei-smokes' TestRenseiHostDaemonCommandSurface.
 // The substitutions are clean:
 //
-//   rensei host provider list  → af provider list
-//   rensei host kit list       → af kit list
-//   rensei host workarea list  → af workarea list
-//   rensei routing show        → af routing show
+//   rensei host provider list  → donmai provider list
+//   rensei host kit list       → donmai kit list
+//   rensei host workarea list  → donmai workarea list
+//   rensei routing show        → donmai routing show
 //
-// The af binary surfaces these as top-level subcommands (no `host` parent),
+// The donmai binary surfaces these as top-level subcommands (no `host` parent),
 // matching the OSS-pure shape declared by ADR-2026-05-07. The wantFragments
 // and regression-guard lists port verbatim — same daemon, same JSON shape,
 // same family enum values.
@@ -29,15 +29,15 @@ import (
 )
 
 // TestAfDaemonCommandSurface exercises each of the four migrated
-// daemon-targeted command surfaces against a real `af daemon run` process.
+// daemon-targeted command surfaces against a real `donmai daemon run` process.
 //
-// Skipped under -short and when RENSEI_SMOKES_SKIP_LIVE_DAEMON=1 is set.
+// Skipped under -short and when DONMAI_SMOKES_SKIP_LIVE_DAEMON=1 is set.
 func TestAfDaemonCommandSurface(t *testing.T) {
 	if testing.Short() {
 		t.Skip("end-to-end live-daemon test; skipped under -short")
 	}
-	if os.Getenv("RENSEI_SMOKES_SKIP_LIVE_DAEMON") == "1" {
-		t.Skip("RENSEI_SMOKES_SKIP_LIVE_DAEMON=1 — operator opted out of the live-daemon smoke")
+	if os.Getenv("DONMAI_SMOKES_SKIP_LIVE_DAEMON") == "1" {
+		t.Skip("DONMAI_SMOKES_SKIP_LIVE_DAEMON=1 — operator opted out of the live-daemon smoke")
 	}
 
 	live, donmaiBinary, logBuf := setupLiveDaemon(t)
@@ -46,7 +46,7 @@ func TestAfDaemonCommandSurface(t *testing.T) {
 	// any for these read-only commands, but defence in depth) stays
 	// scoped to a fresh tmp dir.
 	commandHome := t.TempDir()
-	cfgDir := filepath.Join(commandHome, ".config", "rensei")
+	cfgDir := filepath.Join(commandHome, ".config", "donmai")
 	if err := os.MkdirAll(cfgDir, 0o700); err != nil {
 		t.Fatalf("mkdir command home cfg dir: %v", err)
 	}
@@ -131,12 +131,12 @@ func TestAfDaemonCommandSurface(t *testing.T) {
 				DaemonURL:       live.URL,
 			})
 			if err != nil {
-				t.Fatalf("af %s failed: %v\n--- output ---\n%s\n--- daemon log tail ---\n%s",
+				t.Fatalf("donmai %s failed: %v\n--- output ---\n%s\n--- daemon log tail ---\n%s",
 					strings.Join(tc.args, " "), err, out, logBuf.String())
 			}
 
 			if strings.TrimSpace(out) == "" {
-				t.Errorf("af %s produced empty output\n--- daemon log tail ---\n%s",
+				t.Errorf("donmai %s produced empty output\n--- daemon log tail ---\n%s",
 					strings.Join(tc.args, " "), logBuf.String())
 			}
 

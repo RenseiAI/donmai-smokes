@@ -40,7 +40,7 @@ jobs:
         run: go vet ./...
 
       # Live-daemon tests (step1..step6 in the root package) skip cleanly
-      # when the sibling ../agentfactory-tui checkout is absent via
+      # when the sibling ../donmai checkout is absent via
       # harness.BuildBinary -> t.Skipf. Hosted runners don't have it,
       # so those tests skip and the harness/* unit suite carries the run.
       - name: go test
