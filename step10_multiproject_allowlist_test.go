@@ -73,7 +73,7 @@ func TestMultiProjectAllowlistRouting(t *testing.T) {
 	// DONMAI_DAEMON_FORCE_STUB=1 (set by LiveDaemonWithConfig's hermetic
 	// env) ensures the daemon takes the stub registration path instead of
 	// dialling out, so this URL is never opened.
-	const daemonYAML = `apiVersion: rensei.dev/v1
+	const daemonYAML = `apiVersion: donmai.dev/v1
 kind: LocalDaemon
 machine:
   id: smoke-multiproject
@@ -274,9 +274,9 @@ autoUpdate:
 				switch w.SessionID {
 				case sessionBeta:
 					foundBeta = true
-					// repository tag must carry the id from the allowlist
-					// entry — WorkerSpawner records project.ID in the
-					// workarea projection when matchProject matched by ID.
+					// WorkareaSummary.Repository mirrors ss.spec.Repository
+					// (the value posted in the session spec body). We sent
+					// "smoke-beta", so that is what must round-trip here.
 					if w.Repository != "smoke-beta" {
 						t.Errorf("beta workarea Repository = %q, want smoke-beta", w.Repository)
 					}
