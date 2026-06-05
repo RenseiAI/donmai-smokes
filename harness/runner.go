@@ -51,7 +51,7 @@ type RunnerConfig struct {
 	// log lines. Free-form (e.g. "flag", "env", "build-local").
 	BinaryOverrideSource string
 
-	// OverrideTarget is the program name (e.g. "rensei", "af") whose
+	// OverrideTarget is the program name (e.g. "rensei", "donmai") whose
 	// invocations get rewritten to BinaryOverride. Required when
 	// BinaryOverride is non-empty.
 	OverrideTarget string

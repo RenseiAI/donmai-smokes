@@ -38,8 +38,8 @@ const DaemonProbeTimeout = 5 * time.Second
 
 // DaemonProbeOptions parameterises DaemonAvailable so the same probe shape
 // applies to any daemon-bearing CLI: rensei (rensei host run + legacy
-// rensei-daemon), af (af daemon run + no legacy binary), or any future
-// fork.
+// rensei-daemon), donmai (donmai daemon run + no legacy binary), or any
+// future fork.
 //
 // The probe semantics:
 //
@@ -48,8 +48,8 @@ const DaemonProbeTimeout = 5 * time.Second
 //  2. If LegacyBinary is non-empty AND on PATH, the binary mode is used.
 //  3. Otherwise the daemon is absent.
 type DaemonProbeOptions struct {
-	// Binary is the top-level CLI to probe (e.g. "rensei", "af"). Empty
-	// values are treated as "no binary" — the probe falls through.
+	// Binary is the top-level CLI to probe (e.g. "rensei", "donmai").
+	// Empty values are treated as "no binary" — the probe falls through.
 	Binary string
 
 	// SubcommandPath is the chain of subcommands that exposes the daemon.
@@ -62,7 +62,7 @@ type DaemonProbeOptions struct {
 	// is present. For rensei this is "rensei host run [" — the trailing
 	// "[" disambiguates the Usage line ("Usage:\n  rensei host run [flags]")
 	// from a help blurb that happens to mention the command. For af it is
-	// "af daemon run [".
+	// "donmai daemon run [".
 	//
 	// Older CLI versions where the subcommand is absent fall through to
 	// the parent help (Usage: "<binary> <parent> [command]") which does

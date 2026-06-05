@@ -1,17 +1,17 @@
 package smokes
 
 // step6_af_daemon_install_lifecycle_test.go — exercises the
-// `af daemon install / uninstall` CLI surface with a hermetic HOME so
+// `donmai daemon install / uninstall` CLI surface with a hermetic HOME so
 // the plist (macOS) / unit file (Linux) is written to a temp path
 // instead of the operator's real ~/Library/LaunchAgents or
 // ~/.config/systemd/user. The hidden `--skip-service-manager` flag
-// (Wave 12 Phase 5d, agentfactory-tui afcli/daemon.go) prevents the
+// (Wave 12 Phase 5d, donmai afcli/daemon.go) prevents the
 // launchctl / systemctl invocation that would otherwise need real
 // elevated state.
 //
 // Per WAVE12_PLAN.md § "Phase 5d" + WAVE12_PHASE2_AUDIT.md § 3.4:
 // Wave-10 Q11 carryover. `TestAfDaemonLifecycle` (step1) covers the
-// foreground `af daemon run` cycle; this smoke covers the install-side
+// foreground `donmai daemon run` cycle; this smoke covers the install-side
 // CLI surface so a regression that drops a verb, renames the unit
 // file, or breaks plist generation fires here.
 //
@@ -26,7 +26,7 @@ package smokes
 // installer's `UnitFilename` (installer/systemd/installer.go:46-49)
 // is `rensei-daemon.service`. The smoke uses the actual filename.
 //
-// Skip-mode: honours `RENSEI_SMOKES_SKIP_INSTALLER=1` + `-short`,
+// Skip-mode: honours `DONMAI_SMOKES_SKIP_INSTALLER=1` + `-short`,
 // matching step1-step5's pattern. Also skipped on non-darwin/linux
 // since the installer dispatcher only supports those.
 
@@ -43,16 +43,16 @@ import (
 	afh "github.com/RenseiAI/donmai-smokes/harness"
 )
 
-// TestAfDaemonInstallLifecycle exercises `af daemon install` +
-// `af daemon uninstall` under a hermetic HOME with the hidden
+// TestAfDaemonInstallLifecycle exercises `donmai daemon install` +
+// `donmai daemon uninstall` under a hermetic HOME with the hidden
 // `--skip-service-manager` flag set, asserting the unit file is
 // written on install and removed on uninstall.
 func TestAfDaemonInstallLifecycle(t *testing.T) {
 	if testing.Short() {
 		t.Skip("install lifecycle smoke; skipped under -short")
 	}
-	if os.Getenv("RENSEI_SMOKES_SKIP_INSTALLER") == "1" {
-		t.Skip("RENSEI_SMOKES_SKIP_INSTALLER=1 — operator opted out of the install lifecycle smoke")
+	if os.Getenv("DONMAI_SMOKES_SKIP_INSTALLER") == "1" {
+		t.Skip("DONMAI_SMOKES_SKIP_INSTALLER=1 — operator opted out of the install lifecycle smoke")
 	}
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		t.Skipf("install lifecycle smoke only runs on darwin/linux; got %s", runtime.GOOS)
@@ -131,7 +131,7 @@ func TestAfDaemonInstallLifecycle(t *testing.T) {
 
 		installOut, err := installCmd.CombinedOutput()
 		if err != nil {
-			t.Fatalf("af daemon install --skip-service-manager failed: %v\n--- output ---\n%s",
+			t.Fatalf("donmai daemon install --skip-service-manager failed: %v\n--- output ---\n%s",
 				err, installOut)
 		}
 		t.Logf("install output:\n%s", installOut)
@@ -154,17 +154,17 @@ func TestAfDaemonInstallLifecycle(t *testing.T) {
 				servicePath, installOut)
 		}
 
-		// Read the unit file content; assert it references the af
-		// binary path + the `daemon run` subcommand. This is the
-		// REN-1406 contract — the registered service must invoke
-		// `<host-binary> daemon run`, not a separate rensei-daemon.
+		// Read the unit file content; assert it references the donmai
+		// binary path + the `daemon run` subcommand. The registered
+		// service must invoke `<host-binary> daemon run`, not a
+		// separate rensei-daemon.
 		content, err := os.ReadFile(servicePath) //nolint:gosec // hermetic test path
 		if err != nil {
 			t.Fatalf("read service file: %v", err)
 		}
 		body := string(content)
 		if !strings.Contains(body, donmaiBinary) {
-			t.Errorf("service file does not reference af binary path %q\n--- content ---\n%s",
+			t.Errorf("service file does not reference donmai binary path %q\n--- content ---\n%s",
 				donmaiBinary, body)
 		}
 		// Both plist and unit-file formats reference the literal
@@ -182,7 +182,7 @@ func TestAfDaemonInstallLifecycle(t *testing.T) {
 			t.Errorf("service file does not reference 'run' subcommand\n--- content ---\n%s",
 				body)
 		}
-		t.Logf("service file at %s (%d bytes) — references af binary + daemon/run",
+		t.Logf("service file at %s (%d bytes) — references donmai binary + daemon/run",
 			servicePath, info.Size())
 	}
 
@@ -201,7 +201,7 @@ func TestAfDaemonInstallLifecycle(t *testing.T) {
 
 		uninstallOut, err := uninstallCmd.CombinedOutput()
 		if err != nil {
-			t.Fatalf("af daemon uninstall --skip-service-manager failed: %v\n--- output ---\n%s",
+			t.Fatalf("donmai daemon uninstall --skip-service-manager failed: %v\n--- output ---\n%s",
 				err, uninstallOut)
 		}
 		t.Logf("uninstall output:\n%s", uninstallOut)

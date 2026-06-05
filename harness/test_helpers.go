@@ -14,13 +14,13 @@ import (
 // the script's parent directory.
 type FakeBinarySubcommandFixture struct {
 	// BinaryName is the basename of the script written to Dir
-	// (e.g. "rensei", "af"). The fixture writes the file at
+	// (e.g. "rensei", "donmai"). The fixture writes the file at
 	// filepath.Join(Dir, BinaryName) with mode 0o755.
 	BinaryName string
 
 	// SubcommandPath is the chain of subcommand args the fixture will
 	// respond to with the help-output below (e.g. ["host","run"] for
-	// rensei or ["daemon","run"] for af). When the script is invoked
+	// rensei or ["daemon","run"] for donmai). When the script is invoked
 	// with these args followed by --help, it prints the configured
 	// help body and exits 0.
 	SubcommandPath []string
@@ -35,7 +35,7 @@ type FakeBinarySubcommandFixture struct {
 	// UsageMarker is the substring DaemonAvailable looks for in the
 	// help output to confirm the subcommand is present. The fixture
 	// embeds this in the generated script's Usage line when
-	// SubcommandPresent is true (e.g. "rensei host run [", "af daemon run [").
+	// SubcommandPresent is true (e.g. "rensei host run [", "donmai daemon run [").
 	UsageMarker string
 }
 

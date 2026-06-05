@@ -26,9 +26,9 @@ import (
 // Used by:
 //   - rensei-smokes' help-mirror regression guard
 //     (TestRenseiHelpMirrorsAfForMigratedSurfaces) which compares the
-//     parsed maps from both rensei and af binaries.
-//   - agentfactory-smokes' (Phase 10) TestAfHelpDeprecationGuard which
-//     pins the af binary's help surface against a hard-coded baseline.
+//     parsed maps from both rensei and donmai binaries.
+//   - donmai-smokes' (Phase 10) TestAfHelpDeprecationGuard which
+//     pins the donmai binary's help surface against a hard-coded baseline.
 func ParseHelpSubcommands(ctx context.Context, binary string, args ...string) (map[string]string, string, error) {
 	helpArgs := append([]string{}, args...)
 	helpArgs = append(helpArgs, "--help")

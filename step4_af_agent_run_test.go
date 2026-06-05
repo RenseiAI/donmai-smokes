@@ -1,11 +1,11 @@
 package smokes
 
-// step4_af_agent_run_test.go — live-daemon smoke for the `af agent run`
+// step4_af_agent_run_test.go — live-daemon smoke for the `donmai agent run`
 // dispatch path. Wave 11 / Phase 7d (carryover from Wave 10 Phase 10).
 //
-// What this exercises end-to-end against a real `af daemon run` process:
+// What this exercises end-to-end against a real `donmai daemon run` process:
 //
-//   1. Spin up `af daemon run` foreground via the harness (mirroring
+//   1. Spin up `donmai daemon run` foreground via the harness (mirroring
 //      step1's setupLiveDaemon shape, but with a pre-written daemon.yaml
 //      that carries a project allowlist entry — necessary because
 //      WorkerSpawner rejects sessions whose Repository field doesn't
@@ -14,7 +14,7 @@ package smokes
 //      POST /api/daemon/sessions with a SessionSpec — the no-orchestrator
 //      queued-work path the Phase 7d audit confirmed is supported (the
 //      same endpoint TestServer_AcceptWork_AndListSessions exercises
-//      in agentfactory-tui's daemon package, here driven over real HTTP
+//      in donmai's daemon package, here driven over real HTTP
 //      against a live binary).
 //   3. Assert HTTP 202 + a populated SessionHandle envelope — proof
 //      AcceptWork validated the allowlist, found capacity, and started
@@ -25,12 +25,12 @@ package smokes
 //      routing decision on the Started edge (synchronous in the spawn
 //      goroutine, before the child exec.Cmd.Start returns), so this
 //      endpoint's transition from 404 to 200 is the canonical
-//      "session-started" forward marker for the af binary.
+//      "session-started" forward marker for the donmai binary.
 //
-// Why we don't assert the spawned `af agent run` process completes
+// Why we don't assert the spawned `donmai agent run` process completes
 // successfully: the daemon's POST /api/daemon/sessions handler calls
 // AcceptWork with a nil SessionDetail (no platform-side enrichment is
-// available locally), so the spawned `af agent run` child will fetch
+// available locally), so the spawned `donmai agent run` child will fetch
 // /api/daemon/sessions/<id> → 404 → exit 2 at preflight. The Started
 // edge fires before that exit, and the routing decision recording
 // captures it deterministically. The test thus pins what the OSS
@@ -59,19 +59,18 @@ import (
 	afh "github.com/RenseiAI/donmai-smokes/harness"
 )
 
-// TestAfAgentRunSmoke spins up a real `af daemon run`, injects a stub
+// TestAfAgentRunSmoke spins up a real `donmai daemon run`, injects a stub
 // session via the local control API, and asserts the spawner's
 // session-started listener fired by polling /api/daemon/routing/explain.
 //
-// Skipped under -short and when RENSEI_SMOKES_SKIP_LIVE_DAEMON=1 is set
-// (matching the rensei-smokes step11 / agentfactory-smokes step1-3
-// pattern).
+// Skipped under -short and when DONMAI_SMOKES_SKIP_LIVE_DAEMON=1 is set
+// (matching the rensei-smokes step11 / donmai-smokes step1-3 pattern).
 func TestAfAgentRunSmoke(t *testing.T) {
 	if testing.Short() {
 		t.Skip("end-to-end live-daemon test; skipped under -short")
 	}
-	if os.Getenv("RENSEI_SMOKES_SKIP_LIVE_DAEMON") == "1" {
-		t.Skip("RENSEI_SMOKES_SKIP_LIVE_DAEMON=1 — operator opted out of the live-daemon smoke")
+	if os.Getenv("DONMAI_SMOKES_SKIP_LIVE_DAEMON") == "1" {
+		t.Skip("DONMAI_SMOKES_SKIP_LIVE_DAEMON=1 — operator opted out of the live-daemon smoke")
 	}
 
 	// Pre-baked daemon.yaml carrying a project allowlist entry. This is
@@ -184,7 +183,7 @@ autoUpdate:
 	// returns the handle, so by the time POST returned 202 the
 	// recording should already be visible. We poll briefly anyway to
 	// stay resilient against future ordering tweaks (mirroring the
-	// agentfactory-tui daemon-package pattern in
+	// donmai daemon-package pattern in
 	// TestHandleExplainRouting_LiveSessionEndToEnd).
 	explainURL := live.URL + "/api/daemon/routing/explain/" + sessionID
 
@@ -220,11 +219,11 @@ autoUpdate:
 	}
 
 	// Decode the explain envelope. RoutingExplainResponse shape per
-	// agentfactory-tui/afclient/routing_types.go:
+	// donmai/afclient/routing_types.go:
 	//   { sessionId, decision: { sessionId, chosenSandbox, chosenLLM, ... }, trace: [...] }
 	// We only assert the load-bearing fields — the OSS daemon's
 	// degenerate-decision shape is locked by the in-process tests in
-	// agentfactory-tui's daemon package.
+	// donmai's daemon package.
 	var explain struct {
 		SessionID string `json:"sessionId"`
 		Decision  struct {

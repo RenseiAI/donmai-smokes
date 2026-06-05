@@ -1,9 +1,9 @@
 package harness
 
 // live_daemon.go — `LiveDaemonWithConfig` is the canonical helper for
-// af-binary smoke tests that need a live `af daemon run` process, with
-// the option of pre-writing a `daemon.yaml` under the daemon's isolated
-// HOME before spawn.
+// donmai-binary smoke tests that need a live `donmai daemon run` process,
+// with the option of pre-writing a `daemon.yaml` under the daemon's
+// isolated HOME before spawn.
 //
 // Wave 12 / Phase 5b (C2 cleanup carryover from Wave 11): step4 +
 // step5 each duplicated ~80 lines of build + pickPort + write

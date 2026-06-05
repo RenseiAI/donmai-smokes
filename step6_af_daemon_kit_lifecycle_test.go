@@ -1,7 +1,7 @@
 package smokes
 
 // step6_af_daemon_kit_lifecycle_test.go — customer-visible Wave 12
-// acceptance test. Drives a real `af daemon run` through the full kit
+// acceptance test. Drives a real `donmai daemon run` through the full kit
 // lifecycle:
 //
 //   1. Permissive mode + git-source install of an unsigned kit →
@@ -31,7 +31,7 @@ package smokes
 // VirtualSigstore CA can sign offline but cannot chain to the embedded
 // production trust root, so any offline-signed bundle would deliver
 // trust=signed-unverified rather than trust=signed-verified. The
-// Phase 3 / Phase 4 unit tests inside agentfactory-tui's `daemon`
+// Phase 3 / Phase 4 unit tests inside donmai's `daemon`
 // package cover signed-verified end-to-end via the
 // `newKitVerifierWithMaterial` test seam (see kit_trust_test.go and
 // kit_install_git_test.go for the in-process exercise).
@@ -47,14 +47,14 @@ package smokes
 //     spawn time.
 //
 // Both fall outside the Wave 12 sealed scope (Phase 3 + Phase 4 daemon
-// surface) and outside the agentfactory-smokes write-target boundary
+// surface) and outside the donmai-smokes write-target boundary
 // for this Phase 6 sub-agent.
 //
-// Skip-mode: honours RENSEI_SMOKES_SKIP_LIVE_DAEMON=1 + -short, matching
+// Skip-mode: honours DONMAI_SMOKES_SKIP_LIVE_DAEMON=1 + -short, matching
 // step1-step5's pattern.
 //
 // Timing: warm cache ~3-5s (single live spin-up per trust mode + ~6
-// HTTP calls + a daemon restart). Cold cache adds 60-90s for the af
+// HTTP calls + a daemon restart). Cold cache adds 60-90s for the donmai
 // binary build.
 
 import (
@@ -170,7 +170,7 @@ kit:
 `
 
 // TestAfDaemonKitLifecycleHonestEndToEnd is the Wave 12 customer-
-// visible acceptance test. Drives a real `af daemon run` through the
+// visible acceptance test. Drives a real `donmai daemon run` through the
 // kit-install + verify-signature lifecycle in both permissive and
 // signed-by-allowlist trust modes against a local git fixture.
 //
@@ -180,8 +180,8 @@ func TestAfDaemonKitLifecycleHonestEndToEnd(t *testing.T) {
 	if testing.Short() {
 		t.Skip("end-to-end live-daemon test; skipped under -short")
 	}
-	if os.Getenv("RENSEI_SMOKES_SKIP_LIVE_DAEMON") == "1" {
-		t.Skip("RENSEI_SMOKES_SKIP_LIVE_DAEMON=1 — operator opted out of the live-daemon smoke")
+	if os.Getenv("DONMAI_SMOKES_SKIP_LIVE_DAEMON") == "1" {
+		t.Skip("DONMAI_SMOKES_SKIP_LIVE_DAEMON=1 — operator opted out of the live-daemon smoke")
 	}
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skipf("git binary unavailable on PATH: %v", err)
@@ -614,7 +614,7 @@ func TestAfDaemonKitLifecycleHonestEndToEnd(t *testing.T) {
 // the operator's global git config.
 //
 // Shell-out to `git` keeps the smokes module dep-light (no go-git import
-// needed) and matches the agentfactory-tui Phase 4 fixture pattern at
+// needed) and matches the donmai Phase 4 fixture pattern at
 // the operator-facing level — the daemon's gitKitFetcher will clone
 // this repo via go-git over a `file://` URL once we hand it that URL.
 func gitInitFixture(t *testing.T, repoDir string) {
