@@ -18,7 +18,7 @@ type BuildOptions struct {
 	SourceDir string
 
 	// EntryPoint is the package path passed to `go build` (e.g.
-	// "./cmd/af", "./cmd/rensei"). Required.
+	// "./cmd/donmai", "./cmd/rensei"). Required.
 	EntryPoint string
 
 	// OutputPath is the absolute path of the produced executable.
@@ -43,16 +43,17 @@ type BuildOptions struct {
 	Timeout time.Duration
 }
 
-// BuildAfBinary is a convenience wrapper around BuildBinary that fills in
-// the af-binary defaults (SourceDir="../agentfactory-tui",
-// EntryPoint="./cmd/af") so af-side smoke tests can build the binary in one
-// line. The OutputPath is required; pass filepath.Join(t.TempDir(), "af")
-// or similar. Other BuildOptions fields (Env, LogSink, Timeout) override
-// the defaults when set; SourceDir / EntryPoint cannot be overridden via
-// this wrapper — call BuildBinary directly for non-default builds.
-func BuildAfBinary(ctx context.Context, opts BuildOptions) (string, error) {
-	opts.SourceDir = "../agentfactory-tui"
-	opts.EntryPoint = "./cmd/af"
+// BuildDonmaiBinary is a convenience wrapper around BuildBinary that fills
+// in the donmai-binary defaults (SourceDir="../donmai",
+// EntryPoint="./cmd/donmai") so donmai-side smoke tests can build the
+// binary in one line. The OutputPath is required; pass
+// filepath.Join(t.TempDir(), "donmai") or similar. Other BuildOptions
+// fields (Env, LogSink, Timeout) override the defaults when set;
+// SourceDir / EntryPoint cannot be overridden via this wrapper — call
+// BuildBinary directly for non-default builds.
+func BuildDonmaiBinary(ctx context.Context, opts BuildOptions) (string, error) {
+	opts.SourceDir = "../donmai"
+	opts.EntryPoint = "./cmd/donmai"
 	return BuildBinary(ctx, opts)
 }
 

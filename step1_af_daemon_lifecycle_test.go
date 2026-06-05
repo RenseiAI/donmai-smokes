@@ -54,7 +54,7 @@ func TestAfDaemonLifecycle(t *testing.T) {
 		t.Skip("RENSEI_SMOKES_SKIP_LIVE_DAEMON=1 — operator opted out of the live-daemon smoke")
 	}
 
-	live, afBinary, logBuf := setupLiveDaemon(t)
+	live, donmaiBinary, logBuf := setupLiveDaemon(t)
 
 	// LiveDaemon.Port (Wave 11 Phase 7a) returns the bound port directly,
 	// parsed once at construction. We need it both as a flag and to
@@ -68,10 +68,10 @@ func TestAfDaemonLifecycle(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		out, err := afh.RunHermeticAgainstDaemon(ctx, afh.HermeticRunOptions{
-			Binary:          afBinary,
+			Binary:          donmaiBinary,
 			Args:            []string{"daemon", "status", hostFlag, portFlag},
 			HomeDir:         t.TempDir(),
-			DaemonURLEnvVar: "RENSEI_DAEMON_URL",
+			DaemonURLEnvVar: "DONMAI_DAEMON_URL",
 			DaemonURL:       live.URL,
 		})
 		if err != nil {
@@ -103,10 +103,10 @@ func TestAfDaemonLifecycle(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		out, err := afh.RunHermeticAgainstDaemon(ctx, afh.HermeticRunOptions{
-			Binary:          afBinary,
+			Binary:          donmaiBinary,
 			Args:            []string{"daemon", "stats", hostFlag, portFlag},
 			HomeDir:         t.TempDir(),
-			DaemonURLEnvVar: "RENSEI_DAEMON_URL",
+			DaemonURLEnvVar: "DONMAI_DAEMON_URL",
 			DaemonURL:       live.URL,
 		})
 		if err != nil {

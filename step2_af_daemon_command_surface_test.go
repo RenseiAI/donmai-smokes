@@ -40,7 +40,7 @@ func TestAfDaemonCommandSurface(t *testing.T) {
 		t.Skip("RENSEI_SMOKES_SKIP_LIVE_DAEMON=1 — operator opted out of the live-daemon smoke")
 	}
 
-	live, afBinary, logBuf := setupLiveDaemon(t)
+	live, donmaiBinary, logBuf := setupLiveDaemon(t)
 
 	// Per-command HOME so any af-side config write (there shouldn't be
 	// any for these read-only commands, but defence in depth) stays
@@ -124,10 +124,10 @@ func TestAfDaemonCommandSurface(t *testing.T) {
 			defer cmdCancel()
 
 			out, err := afh.RunHermeticAgainstDaemon(cmdCtx, afh.HermeticRunOptions{
-				Binary:          afBinary,
+				Binary:          donmaiBinary,
 				Args:            tc.args,
 				HomeDir:         commandHome,
-				DaemonURLEnvVar: "RENSEI_DAEMON_URL",
+				DaemonURLEnvVar: "DONMAI_DAEMON_URL",
 				DaemonURL:       live.URL,
 			})
 			if err != nil {

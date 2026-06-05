@@ -18,7 +18,7 @@ package smokes
 // Hermetic-by-HOME is feasible because both installers resolve the
 // service path via `os.UserHomeDir()` (which honours HOME):
 //
-//   - launchd:  <home>/Library/LaunchAgents/dev.rensei.daemon.plist
+//   - launchd:  <home>/Library/LaunchAgents/dev.donmai.daemon.plist
 //   - systemd:  <home>/.config/systemd/user/rensei-daemon.service
 //
 // Audit-noted nit: the audit prompt enumerated the Linux unit
@@ -58,23 +58,23 @@ func TestAfDaemonInstallLifecycle(t *testing.T) {
 		t.Skipf("install lifecycle smoke only runs on darwin/linux; got %s", runtime.GOOS)
 	}
 
-	// Build af from the sibling agentfactory-tui checkout. Cold cache
+	// Build donmai from the sibling donmai checkout. Cold cache
 	// 60-90s; warm sub-second. 3-minute parent context is generous.
 	buildCtx, buildCancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer buildCancel()
 
 	binDir := t.TempDir()
-	afBinary, err := afh.BuildAfBinary(buildCtx, afh.BuildOptions{
-		OutputPath: filepath.Join(binDir, "af"),
+	donmaiBinary, err := afh.BuildDonmaiBinary(buildCtx, afh.BuildOptions{
+		OutputPath: filepath.Join(binDir, "donmai"),
 		Env:        append(os.Environ(), "GOWORK="),
 	})
 	if err != nil {
 		if strings.Contains(err.Error(), "resolve ../") ||
 			strings.Contains(err.Error(), "no such file") ||
 			strings.Contains(err.Error(), "executable file not found") {
-			t.Skipf("af binary unavailable: %v", err)
+			t.Skipf("donmai binary unavailable: %v", err)
 		}
-		t.Fatalf("build af binary: %v", err)
+		t.Fatalf("build donmai binary: %v", err)
 	}
 
 	// Hermetic HOME — both installers resolve the service file path via
@@ -91,7 +91,7 @@ func TestAfDaemonInstallLifecycle(t *testing.T) {
 	case "darwin":
 		// installer/launchd/installer.go: LaunchdLabel = "dev.rensei.daemon"
 		// PlistPath = $HOME/Library/LaunchAgents/<label>.plist
-		servicePath = filepath.Join(fakeHome, "Library", "LaunchAgents", "dev.rensei.daemon.plist")
+		servicePath = filepath.Join(fakeHome, "Library", "LaunchAgents", "dev.donmai.daemon.plist")
 	case "linux":
 		// installer/systemd/installer.go: UnitFilename = "rensei-daemon.service"
 		// User-scope dir = $HOME/.config/systemd/user (XDG_CONFIG_HOME unused
@@ -126,7 +126,7 @@ func TestAfDaemonInstallLifecycle(t *testing.T) {
 			args = append(args, "--user")
 		}
 
-		installCmd := exec.CommandContext(runCtx, afBinary, args...) //nolint:gosec // hermetic test
+		installCmd := exec.CommandContext(runCtx, donmaiBinary, args...) //nolint:gosec // hermetic test
 		installCmd.Env = hermeticEnv
 
 		installOut, err := installCmd.CombinedOutput()
@@ -163,9 +163,9 @@ func TestAfDaemonInstallLifecycle(t *testing.T) {
 			t.Fatalf("read service file: %v", err)
 		}
 		body := string(content)
-		if !strings.Contains(body, afBinary) {
+		if !strings.Contains(body, donmaiBinary) {
 			t.Errorf("service file does not reference af binary path %q\n--- content ---\n%s",
-				afBinary, body)
+				donmaiBinary, body)
 		}
 		// Both plist and unit-file formats reference the literal
 		// substring `daemon run` (plist splits to two <string>
@@ -196,7 +196,7 @@ func TestAfDaemonInstallLifecycle(t *testing.T) {
 			args = append(args, "--user")
 		}
 
-		uninstallCmd := exec.CommandContext(runCtx, afBinary, args...) //nolint:gosec // hermetic test
+		uninstallCmd := exec.CommandContext(runCtx, donmaiBinary, args...) //nolint:gosec // hermetic test
 		uninstallCmd.Env = hermeticEnv
 
 		uninstallOut, err := uninstallCmd.CombinedOutput()

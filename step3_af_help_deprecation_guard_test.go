@@ -48,17 +48,17 @@ func TestAfHelpDeprecationGuard(t *testing.T) {
 	defer buildCancel()
 
 	binDir := t.TempDir()
-	afBinary, err := afh.BuildAfBinary(buildCtx, afh.BuildOptions{
-		OutputPath: binDir + "/af",
+	donmaiBinary, err := afh.BuildDonmaiBinary(buildCtx, afh.BuildOptions{
+		OutputPath: binDir + "/donmai",
 		Env:        append(os.Environ(), "GOWORK="),
 	})
 	if err != nil {
 		if strings.Contains(err.Error(), "resolve ../") ||
 			strings.Contains(err.Error(), "no such file") ||
 			strings.Contains(err.Error(), "executable file not found") {
-			t.Skipf("af binary unavailable: %v", err)
+			t.Skipf("donmai binary unavailable: %v", err)
 		}
-		t.Fatalf("build af binary: %v", err)
+		t.Fatalf("build donmai binary: %v", err)
 	}
 
 	// Top-level surface — the four Wave 9 surfaces must be present
@@ -69,7 +69,7 @@ func TestAfHelpDeprecationGuard(t *testing.T) {
 		helpCtx, helpCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer helpCancel()
 
-		got, out, err := afh.ParseHelpSubcommands(helpCtx, afBinary)
+		got, out, err := afh.ParseHelpSubcommands(helpCtx, donmaiBinary)
 		if err != nil {
 			t.Fatalf("af --help: %v\n%s", err, out)
 		}
@@ -137,7 +137,7 @@ func TestAfHelpDeprecationGuard(t *testing.T) {
 			helpCtx, helpCancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer helpCancel()
 
-			got, out, err := afh.ParseHelpSubcommands(helpCtx, afBinary, tc.surface)
+			got, out, err := afh.ParseHelpSubcommands(helpCtx, donmaiBinary, tc.surface)
 			if err != nil {
 				t.Fatalf("af %s --help: %v\n%s", tc.surface, err, out)
 			}

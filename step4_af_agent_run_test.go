@@ -84,7 +84,7 @@ func TestAfAgentRunSmoke(t *testing.T) {
 	// The values below are the minimum that pass validateConfig:
 	// machine.id + orchestrator.url + the allowlist entry's id +
 	// repository. orchestrator.url is set to a localhost loopback that
-	// can't actually be reached — RENSEI_DAEMON_FORCE_STUB=1 (set by
+	// can't actually be reached — DONMAI_DAEMON_FORCE_STUB=1 (set by
 	// LiveDaemonWithConfig's hermetic env) ensures the daemon's
 	// registration path takes the stub branch instead of dialing out,
 	// so this URL is never actually opened.
