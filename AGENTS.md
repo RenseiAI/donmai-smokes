@@ -72,6 +72,7 @@ If this repo's docs conflict with `donmai-architecture`, the corpus wins. Either
 - `step5_af_daemon_operator_endpoints_honest_test.go` — Wave 11 acceptance: kit scan-paths, workarea live-pool, routing decision recording.
 - `step6_af_daemon_install_lifecycle_test.go` — install/uninstall with `--skip-service-manager`.
 - `step6_af_daemon_kit_lifecycle_test.go` — Wave 12 kit lifecycle (install, verify, tamper, trust-mode gate).
+- `step16_arch_assess_native_test.go` — `donmai arch assess` native arch-intel (Layer 1+2) over a fixture PR diff: observations from the native diff-fetch, gate trigger/clear across policies, and the key-gated LLM lane (`mode:native`). Uses a fake `gh`/`claude` on PATH; no platform deps. Point the build at the in-flight port via `DONMAI_ARCH_SOURCE_DIR`.
 
 ## Status
 
