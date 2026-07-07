@@ -43,5 +43,29 @@ jobs:
       # when the sibling ../donmai checkout is absent via
       # harness.BuildBinary -> t.Skipf. Hosted runners don't have it,
       # so those tests skip and the harness/* unit suite carries the run.
+      #
+      # GOWORK=off + -race matches the Makefile gate (`make test`).
       - name: go test
-        run: go test -v ./...
+        run: GOWORK=off go test -race -v ./...
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache: true
+          cache-dependency-path: go.mod
+
+      # Mirrors ../donmai's CI lint step (same pinned action + version),
+      # matching the Makefile gate (`make lint`).
+      - name: Lint
+        uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9
+        with:
+          version: v2.11.4
