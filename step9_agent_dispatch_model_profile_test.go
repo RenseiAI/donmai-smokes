@@ -47,9 +47,9 @@ type resolvedModelProfile struct {
 
 // dispatchPayload is the POST /api/daemon/sessions request body shape.
 type dispatchPayload struct {
-	SessionID    string               `json:"sessionId"`
-	Repository   string               `json:"repository"`
-	Ref          string               `json:"ref"`
+	SessionID    string                `json:"sessionId"`
+	Repository   string                `json:"repository"`
+	Ref          string                `json:"ref"`
 	ModelProfile *resolvedModelProfile `json:"modelProfile,omitempty"`
 }
 
@@ -163,7 +163,7 @@ func TestAgentDispatchWithModelProfile(t *testing.T) {
 		if err != nil {
 			t.Fatalf("POST /api/daemon/sessions: %v", err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode != http.StatusAccepted {
 			respBody, _ := io.ReadAll(resp.Body)
 			t.Fatalf("status = %d, want 202\n--- body ---\n%s", resp.StatusCode, respBody)
@@ -188,7 +188,7 @@ func TestAgentDispatchWithModelProfile(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GET explain: %v", err)
 		}
-		defer explainResp.Body.Close()
+		defer func() { _ = explainResp.Body.Close() }()
 		if explainResp.StatusCode != http.StatusOK {
 			b, _ := io.ReadAll(explainResp.Body)
 			t.Fatalf("explain status = %d, want 200\n--- body ---\n%s", explainResp.StatusCode, b)
@@ -280,7 +280,7 @@ func TestAgentDispatchWithModelProfile(t *testing.T) {
 		if err != nil {
 			t.Fatalf("POST /api/daemon/sessions: %v", err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode != http.StatusAccepted {
 			b, _ := io.ReadAll(resp.Body)
 			t.Fatalf("status = %d, want 202\n--- body ---\n%s", resp.StatusCode, b)
@@ -303,7 +303,7 @@ func TestAgentDispatchWithModelProfile(t *testing.T) {
 		if err != nil {
 			t.Fatalf("POST: %v", err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("status = %d, want 400", resp.StatusCode)
 		}

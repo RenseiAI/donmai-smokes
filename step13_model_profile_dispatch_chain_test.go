@@ -42,9 +42,9 @@ import (
 // dispatch-chain smoke. It extends the base shape with a CatalogID field so
 // the mock can verify round-trip fidelity.
 type chainDispatchPayload struct {
-	SessionID  string               `json:"sessionId"`
-	Repository string               `json:"repository"`
-	Ref        string               `json:"ref"`
+	SessionID    string             `json:"sessionId"`
+	Repository   string             `json:"repository"`
+	Ref          string             `json:"ref"`
 	ModelProfile *chainModelProfile `json:"modelProfile,omitempty"`
 }
 
@@ -197,7 +197,7 @@ func TestModelProfileDispatchChain(t *testing.T) {
 			if err != nil {
 				t.Fatalf("POST /api/daemon/sessions: %v", err)
 			}
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 
 			if resp.StatusCode != http.StatusAccepted {
 				b, _ := io.ReadAll(resp.Body)
@@ -228,7 +228,7 @@ func TestModelProfileDispatchChain(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GET routing/explain: %v", err)
 			}
-			defer explainResp.Body.Close()
+			defer func() { _ = explainResp.Body.Close() }()
 
 			if explainResp.StatusCode != http.StatusOK {
 				b, _ := io.ReadAll(explainResp.Body)
