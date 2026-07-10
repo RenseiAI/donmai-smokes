@@ -121,10 +121,10 @@ func TestDaemonHardFailRemediation(t *testing.T) {
 		t.Helper()
 		// Match " af " (space-bounded), "` af`", "'af'", "\"af\"".
 		legacy := []string{
-			" af ",     // standalone word in middle of message
-			"`af`",     // backtick-quoted
-			"'af'",     // single-quoted
-			`"af"`,     // double-quoted
+			" af ",      // standalone word in middle of message
+			"`af`",      // backtick-quoted
+			"'af'",      // single-quoted
+			`"af"`,      // double-quoted
 			"af daemon", // "af daemon" as a command example
 			"af linear", "af github", "af project", "af login",
 			"AgentFactory",
