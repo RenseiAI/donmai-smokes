@@ -394,10 +394,10 @@ func TestAfDaemonKitLifecycleHonestEndToEnd(t *testing.T) {
 	//
 	// The daemon's verifier reads <manifestPath>.sigstore via
 	// bundle.LoadJSONFromPath. Garbage content fails to parse →
-	// trust=signed-unverified per Phase 3's VerifyManifest contract:
+	// trust=legacy-manifest-unverified per the manifest/package trust split:
 	//
 	//   if err := bundle.LoadJSONFromPath(...); err != nil {
-	//       res.Trust = afclient.KitTrustSignedUnverified
+	//       res.Trust = afclient.KitTrustLegacyManifestUnverified
 	//       res.Details = fmt.Sprintf("parse bundle: %v", err)
 	//   }
 	//
@@ -438,8 +438,8 @@ func TestAfDaemonKitLifecycleHonestEndToEnd(t *testing.T) {
 		if err := json.Unmarshal(respBody, &verifyResp); err != nil {
 			t.Fatalf("decode tamper verify-signature: %v\n--- body ---\n%s", err, respBody)
 		}
-		if verifyResp.Trust != "signed-unverified" {
-			t.Errorf("tampered-bundle trust = %q, want signed-unverified", verifyResp.Trust)
+		if verifyResp.Trust != "legacy-manifest-unverified" {
+			t.Errorf("tampered-bundle trust = %q, want legacy-manifest-unverified", verifyResp.Trust)
 		}
 		if !verifyResp.OK {
 			t.Errorf("tampered-bundle ok = %v, want true (verifier ran, just rejected bundle)", verifyResp.OK)
@@ -521,8 +521,8 @@ func TestAfDaemonKitLifecycleHonestEndToEnd(t *testing.T) {
 		if err := json.Unmarshal(respBody, &rejectResp); err != nil {
 			t.Fatalf("decode allowlist reject body: %v\n--- body ---\n%s", err, respBody)
 		}
-		if rejectResp.Trust != "signed-unverified" {
-			t.Errorf("allowlist reject body trust = %q, want signed-unverified", rejectResp.Trust)
+		if rejectResp.Trust != "unsigned" {
+			t.Errorf("allowlist reject body trust = %q, want unsigned", rejectResp.Trust)
 		}
 		if rejectResp.Error == "" {
 			t.Errorf("allowlist reject body missing error string")
