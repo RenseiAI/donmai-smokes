@@ -37,10 +37,10 @@ import (
 // mirrors the JSON the daemon emits. Fields are kept deliberately
 // narrow: only the ones the H-workType lane cares about.
 type agentCard struct {
-	ID       string `json:"id"`
-	WorkType string `json:"workType"`
-	PoolRef  string `json:"poolRef"`
-	Model    string `json:"model"`
+	ID       string   `json:"id"`
+	WorkType string   `json:"workType"`
+	PoolRef  string   `json:"poolRef"`
+	Model    string   `json:"model"`
 	Labels   []string `json:"labels"`
 }
 
@@ -123,7 +123,7 @@ func TestAgentCardRoundtrip(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GET /api/daemon/agents: %v", err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("status = %d, want 200", resp.StatusCode)
 		}
@@ -157,7 +157,7 @@ func TestAgentCardRoundtrip(t *testing.T) {
 				if err != nil {
 					t.Fatalf("GET /api/daemon/agents/%s: %v", want.ID, err)
 				}
-				defer resp.Body.Close()
+				defer func() { _ = resp.Body.Close() }()
 				if resp.StatusCode != http.StatusOK {
 					body, _ := io.ReadAll(resp.Body)
 					t.Fatalf("status = %d, want 200\n--- body ---\n%s", resp.StatusCode, body)
@@ -203,7 +203,7 @@ func TestAgentCardRoundtrip(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GET /api/daemon/agents/does-not-exist: %v", err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode != http.StatusNotFound {
 			t.Errorf("status = %d, want 404", resp.StatusCode)
 		}

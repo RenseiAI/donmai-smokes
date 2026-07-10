@@ -380,7 +380,7 @@ func codexBinaryGate(t *testing.T) string {
 	// Fall back to PATH lookup.
 	p, err := exec.LookPath("codex")
 	if err != nil {
-		t.Skipf("codex binary not found on PATH (and CODEX_BIN/CODEX_APP_SERVER_BIN not set) — skipping live codex MCP gate; "+
+		t.Skipf("codex binary not found on PATH (and CODEX_BIN/CODEX_APP_SERVER_BIN not set) — skipping live codex MCP gate; " +
 			"set CODEX_BIN=/path/to/codex to run this test when codex is installed")
 	}
 	return p

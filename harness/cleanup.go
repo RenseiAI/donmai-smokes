@@ -69,12 +69,17 @@ func RunCleanups(hooks []CleanupHook) error {
 // subcommand-based hostUninstallCmd is used.
 //
 // hostStopCmd:      the argv that issues the stop request, e.g.
-//                   ["rensei", "host", "stop"].
+//
+//	["donmai", "daemon", "stop"].
+//
 // hostUninstallCmd: the argv for the in-process uninstall, e.g.
-//                   ["rensei", "host", "uninstall"].
+//
+//	["donmai", "daemon", "uninstall"].
+//
 // legacyUninstallCmd: the argv for the standalone-binary uninstall, e.g.
-//                   ["rensei-daemon", "uninstall"]. May be empty if no
-//                   legacy binary exists for the daemon under test.
+//
+//	["legacy-daemon", "uninstall"]. May be empty if no
+//	legacy binary exists for the daemon under test.
 func StopAndUninstallDaemon(r *Runner, mode DaemonMode, hostStopCmd, hostUninstallCmd, legacyUninstallCmd []string) error {
 	if r == nil {
 		return fmt.Errorf("StopAndUninstallDaemon: Runner is required")

@@ -167,4 +167,3 @@ func TestAfHelpDeprecationGuard(t *testing.T) {
 		})
 	}
 }
-

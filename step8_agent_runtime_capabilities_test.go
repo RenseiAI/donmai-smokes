@@ -37,10 +37,10 @@ type daemonPool struct {
 
 // daemonCapabilities mirrors /api/daemon/capabilities envelope.
 type daemonCapabilities struct {
-	Substrates      []string     `json:"substrates"`
-	Pools           []daemonPool `json:"pools"`
-	ProviderFamilies []string    `json:"providerFamilies"`
-	Version         string       `json:"version"`
+	Substrates       []string     `json:"substrates"`
+	Pools            []daemonPool `json:"pools"`
+	ProviderFamilies []string     `json:"providerFamilies"`
+	Version          string       `json:"version"`
 }
 
 // TestAgentRuntimeCapabilities exercises GET /api/daemon/capabilities against
@@ -80,7 +80,7 @@ func TestAgentRuntimeCapabilities(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GET /api/daemon/capabilities: %v", err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(resp.Body)
@@ -98,7 +98,7 @@ func TestAgentRuntimeCapabilities(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GET /api/daemon/capabilities: %v", err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		var caps daemonCapabilities
 		if err := json.NewDecoder(resp.Body).Decode(&caps); err != nil {
@@ -127,7 +127,7 @@ func TestAgentRuntimeCapabilities(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GET /api/daemon/capabilities: %v", err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		var caps daemonCapabilities
 		if err := json.NewDecoder(resp.Body).Decode(&caps); err != nil {
@@ -157,7 +157,7 @@ func TestAgentRuntimeCapabilities(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GET /api/daemon/capabilities: %v", err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		var caps daemonCapabilities
 		if err := json.NewDecoder(resp.Body).Decode(&caps); err != nil {
@@ -186,7 +186,7 @@ func TestAgentRuntimeCapabilities(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GET /api/daemon/capabilities/unknown: %v", err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode != http.StatusNotFound {
 			t.Errorf("status = %d, want 404", resp.StatusCode)
 		}
