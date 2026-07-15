@@ -6,7 +6,7 @@ module github.com/RenseiAI/donmai-smokes
 go 1.25.10
 
 require (
-	github.com/RenseiAI/donmai v0.0.0-00010101000000-000000000000
+	github.com/RenseiAI/donmai v0.52.1
 	github.com/joho/godotenv v1.5.1
 )
 
@@ -33,18 +33,3 @@ require (
 	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
 )
-
-// TEMPORARY (W14, 2026-07-14) — remove once the viewertest harness lands in a
-// released donmai. The CRITICAL-1 viewer-side screen-assert harness
-// (github.com/RenseiAI/donmai/attachclient/viewertest) lives ONLY on the
-// unpushed local worktree branch `w14-viewertest-harness` and is NOT on donmai
-// main / any released tag. This absolute-path filesystem replace lets the
-// ptyhost + attachwire + viewertest smokes build GOWORK=off against it.
-//
-// RELEASE DEPENDENCY: viewertest must be pushed + merged to donmai main
-// (founder-gated OSS push of the w14-viewertest-harness branch) and released;
-// then delete this replace and pin `require github.com/RenseiAI/donmai vX.Y.Z`
-// to that release. Until then, donmai-smokes CI cannot go green without this
-// replace, and the path is machine-specific so CI on another host would skip
-// (the smokes t.Skip when the donmai module / toolchain is unavailable).
-replace github.com/RenseiAI/donmai => /Users/markkropf/developer/RenseiAi-Org/donmai.wt/w14-viewertest-harness
