@@ -1,0 +1,46 @@
+# swift.kit.toml — standalone mechanism copy of the signed
+# default/swift@1.0.0 contract published by donmai-kits.
+#
+# Source of truth:
+# https://github.com/RenseiAI/donmai-kits/blob/main/kits/swift/kit.toml
+#
+# The identity, support matrix, detection rule, Linux swiftly installer, build
+# and test commands, and foundation ordering below track the published manifest.
+# The post_acquire hook is inlined because this smoke intentionally carries one
+# self-contained fixture rather than installing files into daemon state. This
+# proof does not exercise the signed package's trust verification.
+
+api = "rensei.dev/v1"
+
+[kit]
+id = "default/swift"
+version = "1.0.0"
+name = "Swift"
+description = "Swift Package Manager foundation kit mechanism smoke"
+author = "donmai"
+authorIdentity = "did:web:donmai.dev"
+priority = 70
+
+[supports]
+os = ["linux", "macos"]
+arch = ["x86_64", "arm64"]
+
+[detect]
+files = ["Package.swift"]
+
+[provide.commands]
+build = "swift build"
+test = "swift test"
+
+# Copied verbatim from donmai-kits/kits/swift/kit.toml. The $(uname -m)
+# branch is load-bearing for x86_64 and arm64 cloud images.
+[provide.toolchain_install.linux]
+swift_6 = "curl -fsSL https://download.swift.org/swiftly/linux/swiftly-$(uname -m).tar.gz -o /tmp/swiftly.tgz && tar -xzf /tmp/swiftly.tgz -C /tmp && /tmp/swiftly init --assume-yes --skip-install --no-modify-profile && . \"$HOME/.local/share/swiftly/env.sh\" && swiftly install 6.0.3 && swiftly use 6.0.3"
+
+[provide.hooks]
+# Inline equivalent of the signed package's bin/setup.sh: expose the swiftly
+# toolchain in this shell, then resolve the dependency-free package.
+post_acquire = "if [ -f \"$HOME/.local/share/swiftly/env.sh\" ]; then . \"$HOME/.local/share/swiftly/env.sh\"; elif [ -f \"$HOME/.swiftly/env.sh\" ]; then . \"$HOME/.swiftly/env.sh\"; fi; swift package resolve"
+
+[composition]
+order = "foundation"
