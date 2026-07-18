@@ -1,6 +1,8 @@
 import contextlib
 import io
 import os
+import pathlib
+import tempfile
 import unittest
 from unittest import mock
 
@@ -18,9 +20,10 @@ SWIFTLY_INSTALL = (
 
 
 class FakeSandbox:
-    def __init__(self, kill_error=None):
+    def __init__(self, kill_error=None, sandbox_id="sbx-test-123"):
         self.kill_calls = 0
         self.kill_error = kill_error
+        self.sandbox_id = sandbox_id
 
     def kill(self):
         self.kill_calls += 1
@@ -56,6 +59,14 @@ class RecordingSandbox(FakeSandbox):
         super().__init__()
         self.commands = RecordingCommands()
         self.files = RecordingFiles()
+
+
+def swift_proof_evidence():
+    return harness.ProofEvidence(
+        kit_reference="default/swift@1.0.0",
+        build_step="swift build",
+        test_step="swift test",
+    )
 
 
 class ManifestPipelineTests(unittest.TestCase):
@@ -117,6 +128,18 @@ class ManifestPipelineTests(unittest.TestCase):
         self.assertNotIn(".package(", package)
         self.assertIn("KIT_TOOLCHAIN_SWIFT_TEST_OK", test)
 
+    def test_fixture_inventory_ignores_local_build_artifacts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            (root / "Package.swift").write_text("// fixture\n", encoding="utf-8")
+            build_artifact = root / ".build/debug/binary"
+            build_artifact.parent.mkdir(parents=True)
+            build_artifact.write_bytes(b"\xcf\x00\xff")
+            with mock.patch.object(harness, "fixture_root", return_value=root):
+                files = harness.fixture_relative_files(harness.PROFILES["swift"])
+
+        self.assertEqual(files, ["Package.swift"])
+
     def test_ts_next_default_still_detects_and_composes(self):
         profile = harness.PROFILES["ts-next"]
         plan = harness.build_plan(profile)
@@ -163,9 +186,39 @@ class DryRunAndSafetyTests(unittest.TestCase):
             rendered, "key=<redacted> https://<redacted>@example.com/path"
         )
 
-    def test_positive_timeout_override(self):
-        with mock.patch.dict(os.environ, {"KIT_E2B_TIMEOUT": "123"}, clear=False):
-            self.assertEqual(harness.positive_int_env("KIT_E2B_TIMEOUT", 600), 123)
+    def test_timeout_maximums_are_accepted(self):
+        with mock.patch.dict(
+            os.environ,
+            {"KIT_E2B_TIMEOUT": "900", "KIT_E2B_COMMAND_TIMEOUT": "600"},
+            clear=False,
+        ):
+            self.assertEqual(
+                harness.resolve_timeouts(harness.PROFILES["swift"]), (900, 600)
+            )
+
+    def test_timeout_maximum_plus_one_fails_closed(self):
+        cases = (
+            ("KIT_E2B_TIMEOUT", "901", "KIT_E2B_COMMAND_TIMEOUT", "600"),
+            ("KIT_E2B_TIMEOUT", "900", "KIT_E2B_COMMAND_TIMEOUT", "601"),
+        )
+        for first_name, first_value, second_name, second_value in cases:
+            with self.subTest(name=first_name):
+                with mock.patch.dict(
+                    os.environ,
+                    {first_name: first_value, second_name: second_value},
+                    clear=False,
+                ):
+                    with self.assertRaises(ValueError):
+                        harness.resolve_timeouts(harness.PROFILES["swift"])
+
+    def test_command_timeout_cannot_exceed_sandbox_timeout(self):
+        with mock.patch.dict(
+            os.environ,
+            {"KIT_E2B_TIMEOUT": "300", "KIT_E2B_COMMAND_TIMEOUT": "301"},
+            clear=False,
+        ):
+            with self.assertRaisesRegex(ValueError, "no greater than"):
+                harness.resolve_timeouts(harness.PROFILES["swift"])
 
     def test_invalid_timeout_fails_closed(self):
         for value in ("0", "-1", "not-a-number"):
@@ -174,7 +227,7 @@ class DryRunAndSafetyTests(unittest.TestCase):
                     os.environ, {"KIT_E2B_TIMEOUT": value}, clear=False
                 ):
                     with self.assertRaises(ValueError):
-                        harness.positive_int_env("KIT_E2B_TIMEOUT", 600)
+                        harness.bounded_int_env("KIT_E2B_TIMEOUT", 600, 900)
 
     def test_swift_fixture_staging_is_local_and_deterministic(self):
         sandbox = RecordingSandbox()
@@ -238,22 +291,88 @@ class DryRunAndSafetyTests(unittest.TestCase):
                     harness.PROFILES["swift"], lambda _timeout: sandbox
                 )
 
+        rendered = output.getvalue()
         self.assertEqual(result, 1)
         self.assertEqual(sandbox.kill_calls, 1)
-        self.assertIn("sandbox killed", output.getvalue())
+        self.assertIn("sandbox killed", rendered)
+        self.assertIn("KIT TOOLCHAIN E2B PROOF: swift FAIL", rendered)
+        self.assertNotIn("KIT TOOLCHAIN E2B PROOF: swift PASS", rendered)
 
-    def test_cleanup_failure_turns_success_into_failure(self):
-        sandbox = FakeSandbox(kill_error=RuntimeError("cleanup boom"))
+    def test_success_marker_is_emitted_only_after_cleanup(self):
+        sandbox = FakeSandbox()
         output = io.StringIO()
-        with mock.patch.object(harness, "execute_in_sandbox", return_value=None):
+        with mock.patch.object(
+            harness, "execute_in_sandbox", return_value=swift_proof_evidence()
+        ):
             with contextlib.redirect_stdout(output):
                 result = harness.run_real(
                     harness.PROFILES["swift"], lambda _timeout: sandbox
                 )
 
+        rendered = output.getvalue()
+        self.assertEqual(result, 0)
+        self.assertLess(
+            rendered.index("sandbox killed"),
+            rendered.index("KIT TOOLCHAIN E2B PROOF: swift PASS"),
+        )
+
+    def test_cleanup_failure_turns_success_into_unambiguous_failure(self):
+        sandbox = FakeSandbox(kill_error=RuntimeError("cleanup boom"))
+        output = io.StringIO()
+        with mock.patch.object(
+            harness, "execute_in_sandbox", return_value=swift_proof_evidence()
+        ):
+            with contextlib.redirect_stdout(output):
+                result = harness.run_real(
+                    harness.PROFILES["swift"], lambda _timeout: sandbox
+                )
+
+        rendered = output.getvalue()
         self.assertEqual(result, 1)
         self.assertEqual(sandbox.kill_calls, 1)
-        self.assertIn("sandbox cleanup failed", output.getvalue())
+        self.assertIn("sandbox cleanup failed", rendered)
+        self.assertIn("KIT TOOLCHAIN E2B PROOF: swift FAIL", rendered)
+        self.assertNotIn("KIT TOOLCHAIN E2B PROOF: swift PASS", rendered)
+
+    def test_provider_execution_error_redacts_sandbox_identifier(self):
+        sandbox_id = "sbx-visible-456"
+        sandbox = FakeSandbox(sandbox_id=sandbox_id)
+        output = io.StringIO()
+        with mock.patch.object(
+            harness,
+            "execute_in_sandbox",
+            side_effect=RuntimeError(f"Sandbox {sandbox_id} not found"),
+        ):
+            with contextlib.redirect_stdout(output):
+                result = harness.run_real(
+                    harness.PROFILES["swift"], lambda _timeout: sandbox
+                )
+
+        rendered = output.getvalue()
+        self.assertEqual(result, 1)
+        self.assertNotIn(sandbox_id, rendered)
+        self.assertIn("Sandbox <redacted> not found", rendered)
+
+    def test_cleanup_error_redacts_sandbox_identifier_and_hostname(self):
+        sandbox_id = "sbx-visible-456"
+        sandbox = FakeSandbox(
+            kill_error=RuntimeError(f"host {sandbox_id}.e2b.dev unavailable"),
+            sandbox_id=sandbox_id,
+        )
+        output = io.StringIO()
+        with mock.patch.object(
+            harness, "execute_in_sandbox", return_value=swift_proof_evidence()
+        ):
+            with contextlib.redirect_stdout(output):
+                result = harness.run_real(
+                    harness.PROFILES["swift"], lambda _timeout: sandbox
+                )
+
+        rendered = output.getvalue()
+        self.assertEqual(result, 1)
+        self.assertNotIn(sandbox_id, rendered)
+        self.assertIn("host <redacted>.e2b.dev unavailable", rendered)
+        self.assertNotIn("KIT TOOLCHAIN E2B PROOF: swift PASS", rendered)
 
 
 if __name__ == "__main__":

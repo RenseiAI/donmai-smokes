@@ -16,6 +16,7 @@ SDK installation, network access, or sandbox creation.
 from __future__ import annotations
 
 import argparse
+import contextvars
 import fnmatch
 import os
 import pathlib
@@ -43,6 +44,12 @@ TARGET_OS = "linux"
 SENSITIVE_ENV_SUFFIXES = ("_KEY", "_TOKEN", "_SECRET", "_PASSWORD")
 SENSITIVE_ENV_NAMES = {"TS_FIXTURE_REPO"}
 URL_USERINFO_RE = re.compile(r"(?P<scheme>https?://)[^/@\s]+@", re.IGNORECASE)
+MAX_SANDBOX_TIMEOUT = 900
+MAX_COMMAND_TIMEOUT = 600
+FIXTURE_IGNORED_DIRS = {".build", "__pycache__", "node_modules"}
+_RUN_REDACTIONS: contextvars.ContextVar[tuple[str, ...]] = contextvars.ContextVar(
+    "kit_toolchain_run_redactions", default=()
+)
 SWIFT_ENV = (
     'if [ -f "$HOME/.local/share/swiftly/env.sh" ]; then '
     '. "$HOME/.local/share/swiftly/env.sh"; '
@@ -67,6 +74,13 @@ class KitProfile:
     default_sandbox_timeout: int
     default_command_timeout: int
     clone_env: str | None = None
+
+
+@dataclass(frozen=True)
+class ProofEvidence:
+    kit_reference: str
+    build_step: str
+    test_step: str
 
 
 PROFILES = {
@@ -121,9 +135,11 @@ def sensitive_values() -> list[str]:
 
 
 def redact_text(value: Any, secrets: list[str] | None = None) -> str:
-    """Scrub known secret values and URL userinfo from evidence text."""
+    """Scrub known secrets, run identifiers, and URL userinfo from evidence."""
     text = str(value)
-    for secret in sensitive_values() if secrets is None else secrets:
+    known_values = sensitive_values() if secrets is None else list(secrets)
+    known_values.extend(_RUN_REDACTIONS.get())
+    for secret in sorted(set(known_values), key=len, reverse=True):
         if secret:
             text = text.replace(secret, "<redacted>")
     return URL_USERINFO_RE.sub(r"\g<scheme><redacted>@", text)
@@ -240,7 +256,12 @@ def fixture_root(profile: KitProfile) -> pathlib.Path:
 
 def fixture_files(profile: KitProfile) -> list[pathlib.Path]:
     root = fixture_root(profile)
-    files = sorted(path for path in root.rglob("*") if path.is_file())
+    files = sorted(
+        path
+        for path in root.rglob("*")
+        if path.is_file()
+        and not FIXTURE_IGNORED_DIRS.intersection(path.relative_to(root).parts)
+    )
     if not files:
         raise ValueError(f"fixture has no files: {root}")
     return files
@@ -453,7 +474,7 @@ def execute_in_sandbox(
     profile: KitProfile,
     plan: dict[str, Any],
     command_timeout: int,
-) -> None:
+) -> ProofEvidence:
     staged_via = stage_fixture(sandbox, profile)
     log(f"[ok] repo staged via {staged_via}")
     before = establish_clean_base(sandbox, profile)
@@ -502,30 +523,58 @@ def execute_in_sandbox(
     if profile.test_marker not in test_output:
         raise RuntimeError(f"{profile.name} test marker missing")
 
+    return ProofEvidence(
+        kit_reference=demand["kits"][0],
+        build_step=profile.build_command.split(";")[-1].strip(),
+        test_step=profile.test_command.split(";")[-1].strip(),
+    )
+
+
+def render_success_summary(profile: KitProfile, evidence: ProofEvidence) -> None:
+    """Emit definitive proof only after fail-closed sandbox teardown succeeds."""
     log("")
     log("=== REDACTED PROOF SUMMARY (mechanism-level, real e2b) ===")
-    log("  sandbox:           created (identifier redacted)")
-    log(f"  kit:               {profile.expected_id}@{profile.expected_version}")
+    log("  sandbox:           created and killed (identifier redacted)")
+    log(f"  kit:               {evidence.kit_reference}")
     log("  repo staged:       before toolchain provisioning")
     log("  toolchain_install: PASSED")
     log("  post_acquire:      PASSED")
     log(f"  {profile.name} version:  PASSED")
-    log(f"  {profile.build_command.split(';')[-1].strip()}: PASSED")
-    log(f"  {profile.test_command.split(';')[-1].strip()}: PASSED")
+    log(f"  {evidence.build_step}: PASSED")
+    log(f"  {evidence.test_step}: PASSED")
     log(f"[ok] KIT TOOLCHAIN E2B PROOF: {profile.name} PASS")
 
 
-def positive_int_env(name: str, default: int) -> int:
+def bounded_int_env(name: str, default: int, maximum: int) -> int:
     raw = os.environ.get(name, "").strip()
     if not raw:
-        return default
-    try:
-        value = int(raw)
-    except ValueError as error:
-        raise ValueError(f"{name} must be a positive integer") from error
+        value = default
+    else:
+        try:
+            value = int(raw)
+        except ValueError as error:
+            raise ValueError(f"{name} must be a positive integer") from error
     if value <= 0:
         raise ValueError(f"{name} must be a positive integer")
+    if value > maximum:
+        raise ValueError(f"{name} must be at most {maximum} seconds")
     return value
+
+
+def resolve_timeouts(profile: KitProfile) -> tuple[int, int]:
+    sandbox_timeout = bounded_int_env(
+        "KIT_E2B_TIMEOUT", profile.default_sandbox_timeout, MAX_SANDBOX_TIMEOUT
+    )
+    command_timeout = bounded_int_env(
+        "KIT_E2B_COMMAND_TIMEOUT",
+        profile.default_command_timeout,
+        MAX_COMMAND_TIMEOUT,
+    )
+    if command_timeout > sandbox_timeout:
+        raise ValueError(
+            "KIT_E2B_COMMAND_TIMEOUT must be no greater than KIT_E2B_TIMEOUT"
+        )
+    return sandbox_timeout, command_timeout
 
 
 def default_sandbox_factory(timeout: int) -> Any:
@@ -548,36 +597,43 @@ def run_real(
         return 2
 
     plan = build_plan(profile)
-    sandbox_timeout = positive_int_env(
-        "KIT_E2B_TIMEOUT", profile.default_sandbox_timeout
-    )
-    command_timeout = positive_int_env(
-        "KIT_E2B_COMMAND_TIMEOUT", profile.default_command_timeout
-    )
+    sandbox_timeout, command_timeout = resolve_timeouts(profile)
     factory = sandbox_factory or default_sandbox_factory
     sandbox = None
-    result_code = 1
+    evidence: ProofEvidence | None = None
+    cleanup_succeeded = False
+    redaction_token: contextvars.Token[tuple[str, ...]] | None = None
     try:
         started = time.monotonic()
         sandbox = factory(sandbox_timeout)
+        sandbox_id = str(getattr(sandbox, "sandbox_id", "") or "").strip()
+        if sandbox_id:
+            redaction_token = _RUN_REDACTIONS.set((sandbox_id,))
         log(
             f"[ok] e2b sandbox created "
             f"({time.monotonic() - started:.1f}s; identifier redacted)"
         )
-        execute_in_sandbox(sandbox, profile, plan, command_timeout)
-        result_code = 0
+        evidence = execute_in_sandbox(sandbox, profile, plan, command_timeout)
     except Exception as error:  # noqa: BLE001 - smoke reports provider failures
         log(f"[error] {type(error).__name__}: {error}")
-        result_code = 1
     finally:
         if sandbox is not None:
             try:
                 sandbox.kill()
+                cleanup_succeeded = True
                 log("[info] sandbox killed (identifier redacted)")
             except Exception as error:  # noqa: BLE001 - cleanup must be visible
                 log(f"[error] sandbox cleanup failed: {error}")
-                result_code = 1
-    return result_code
+
+    try:
+        if evidence is not None and cleanup_succeeded:
+            render_success_summary(profile, evidence)
+            return 0
+        log(f"[error] KIT TOOLCHAIN E2B PROOF: {profile.name} FAIL")
+        return 1
+    finally:
+        if redaction_token is not None:
+            _RUN_REDACTIONS.reset(redaction_token)
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:

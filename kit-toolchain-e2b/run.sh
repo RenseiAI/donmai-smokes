@@ -16,8 +16,9 @@
 #   KIT_TOOLCHAIN_KIT  ts-next (default) or swift.
 #   KIT_E2B_DRY_RUN    1 = validate/print the plan with no cloud access.
 #   KIT_E2B_LOAD_ENV   0 = do not source ../.env.local (safe skip testing).
-#   KIT_E2B_TIMEOUT    optional positive sandbox lifetime in seconds.
-#   KIT_E2B_COMMAND_TIMEOUT optional positive command timeout in seconds.
+#   KIT_E2B_TIMEOUT    sandbox lifetime: 1-900 seconds (default by profile).
+#   KIT_E2B_COMMAND_TIMEOUT command timeout: 1-600 seconds and no greater
+#                           than KIT_E2B_TIMEOUT (default by profile).
 #   E2B_API_KEY        required only for a real run.
 #   TS_FIXTURE_REPO    optional git URL for the legacy ts-next path only;
 #                      Swift always uploads its dependency-free local fixture.
