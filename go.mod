@@ -1,12 +1,12 @@
 module github.com/RenseiAI/donmai-smokes
 
-// Bumped 1.23 -> 1.25.10 (2026-07-14, W14) so this module can depend on
-// github.com/RenseiAI/donmai, whose go directive is 1.25.10. A module's go
-// directive must be >= the max of its dependencies'.
-go 1.25.10
+// Bumped 1.25.10 -> 1.25.12 (2026-07-21) so this module can consume the
+// immutable github.com/RenseiAI/donmai v0.54.0 release, whose go directive is
+// 1.25.12. A module's go directive must be >= the max of its dependencies'.
+go 1.25.12
 
 require (
-	github.com/RenseiAI/donmai v0.52.1
+	github.com/RenseiAI/donmai v0.54.0
 	github.com/joho/godotenv v1.5.1
 )
 
