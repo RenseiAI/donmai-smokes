@@ -58,6 +58,7 @@ each result line in your report.
 - `harness/runner.go` — `Runner`: subprocess executor (dry-run, verbose, timeout, binary override).
 - `harness/help_parser.go` — `ParseHelpSubcommands`: parse Cobra `--help` Available Commands.
 - `harness/errors.go` — `WrapStep`/`StepError` step-context wrapping + `IsUnknownSubcommand`.
+- `harness/opencode_install.go` — `EnsureOpenCodeBinary`: resolves/installs the pinned opencode CLI (npm, isolated prefix) for the step18 opencode harness lane.
 - `setup_live_daemon_test.go` — shared `setupLiveDaemon`; new live-daemon steps reuse it.
 
 ## Iron rules
@@ -67,7 +68,7 @@ each result line in your report.
 - GOWORK is two-sided: tests run `GOWORK=off`; the subprocess building donmai gets `GOWORK=` (cleared) so `../donmai`'s own `go.mod` resolves — never "fix" either (workspace overlay corrupts both resolutions).
 - Every smoke `t.Skip`s cleanly when `../donmai` or the Go toolchain is absent (hosted CI has no sibling).
 - New live-daemon smokes honor `-short` AND `DONMAI_SMOKES_SKIP_LIVE_DAEMON=1` — copy step1's skip block (operators rely on the opt-out).
-- Skip knobs are the CI-operator contract — never repurpose or drop one: `DONMAI_SMOKES_SKIP_LIVE_DAEMON=1` (live-daemon steps), `DONMAI_SMOKES_SKIP_INSTALLER=1` (install lifecycle), `DONMAI_SMOKES_SKIP_LIVE_API=1` (live external-API steps, step15).
+- Skip knobs are the CI-operator contract — never repurpose or drop one: `DONMAI_SMOKES_SKIP_LIVE_DAEMON=1` (live-daemon steps), `DONMAI_SMOKES_SKIP_INSTALLER=1` (install lifecycle), `DONMAI_SMOKES_SKIP_LIVE_API=1` (live external-API steps, step15). The opencode harness lane (step18) additionally honors `DONMAI_SMOKES_OPENCODE_BIN` (point at a pre-installed binary, skipping resolution/install entirely) and `DONMAI_SMOKES_OPENCODE_PIN` (override the installed/accepted version — used by the pin-bump protocol, `donmai-architecture` 07-design-opencode-spawn.md §8).
 - `DONMAI_ARCH_SOURCE_DIR` points the step16 build at an in-flight source port — keep it honored (operators test unmerged ports with it).
 - step16 runs against fake `gh`/`claude` shims prepended to PATH — extend the shims, never invoke the real tools (real calls burn credentials).
 - Logging: `log/slog` to stderr through the harness verbose/quiet toggle (raw prints drown CI logs).

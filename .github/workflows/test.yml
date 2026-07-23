@@ -65,6 +65,32 @@ jobs:
         with:
           python-version: "3.12"
 
+      # Node/npm for the opencode harness lane (step18): npm is how
+      # harness/opencode_install.go installs the pinned opencode-ai CLI
+      # when it isn't already on PATH — mirrors the setup-go/setup-python
+      # steps above (pin the toolchain via its dedicated setup action
+      # rather than trusting whatever the runner image ships).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # Install the pinned opencode CLI (harness.OpenCodePinnedVersion,
+      # kept in lockstep with donmai's provider/harness/opencode.PinnedVersion
+      # by the pin-bump protocol, 07-design-opencode-spawn.md §8) into an
+      # isolated prefix and put it on PATH — same shape as the donmai
+      # pre-build step below: prove the CI-side dependency resolves BEFORE
+      # the suite runs, rather than letting step18 discover a broken
+      # install lazily. harness.EnsureOpenCodeBinary's PATH fast-path then
+      # reuses this binary instead of installing it again per-test.
+      - name: Install pinned opencode CLI
+        run: |
+          npm install -g --no-audit --no-fund --prefix "${RUNNER_TEMP}/opencode-pin" opencode-ai@1.17.18
+          echo "${RUNNER_TEMP}/opencode-pin/bin" >> "$GITHUB_PATH"
+
+      - name: Verify pinned opencode CLI
+        run: |
+          "${RUNNER_TEMP}/opencode-pin/bin/opencode" --version
+
       # Warm the donmai module cache and prove the binary-under-test builds
       # BEFORE the suite, with a 2-attempt retry (Wave 0 mitigation: a flaky
       # sibling checkout/build must not brick the merge queue, and a build
