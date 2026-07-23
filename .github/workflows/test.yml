@@ -21,41 +21,108 @@ jobs:
   test:
     name: "go test (${{ matrix.os }})"
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    # Was 15 while the live-daemon steps SKIPPED on hosted runners (missing
+    # sibling). They now actually execute — cold donmai build (~60-90s) + a
+    # foreground daemon per live step under -race — so the budget is raised.
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
 
     steps:
-      - uses: actions/checkout@v4
+      # Two-repo checkout so the live-daemon smokes actually run instead of
+      # t.Skipf-ing on an absent ../donmai. This harness EXISTS to drive the
+      # donmai daemon lifecycle; skipping it in hosted CI meant a daemon
+      # regression could never red this repo (donmai-scan friction #2). Mirrors
+      # the two-repo pattern donmai-architecture/boundary-sync.yml already uses.
+      # Both repos are public, so the default GITHUB_TOKEN reads RenseiAI/donmai.
+      - name: Check out donmai-smokes
+        uses: actions/checkout@v4
         with:
           fetch-depth: 1
+          path: donmai-smokes
+
+      - name: Check out sibling donmai (system under test)
+        uses: actions/checkout@v4
+        with:
+          repository: RenseiAI/donmai
+          ref: main
+          fetch-depth: 1
+          path: donmai
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          # The smokes module (go 1.25.12, requires donmai v0.54.0) AND the
+          # sibling donmai build both need a modern toolchain; sourcing it from
+          # go.mod avoids a per-run GOTOOLCHAIN auto-download of the pinned
+          # version and keeps CI's Go in lockstep with the module.
+          go-version-file: donmai-smokes/go.mod
           cache: true
-          cache-dependency-path: go.mod
+          cache-dependency-path: donmai-smokes/go.mod
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
+      # Warm the donmai module cache and prove the binary-under-test builds
+      # BEFORE the suite, with a 2-attempt retry (Wave 0 mitigation: a flaky
+      # sibling checkout/build must not brick the merge queue, and a build
+      # break should fail here fast rather than surface as an opaque in-test
+      # skip). GOWORK is cleared so ../donmai resolves its own go.mod — matches
+      # what harness.BuildBinary does for the in-test build.
+      - name: Pre-build donmai binary (warm cache, 2-attempt retry)
+        working-directory: donmai
+        run: |
+          set -u
+          for attempt in 1 2; do
+            if GOWORK= go build -o "${RUNNER_TEMP}/donmai-prebuild" ./cmd/donmai; then
+              echo "donmai build OK (attempt ${attempt})"
+              exit 0
+            fi
+            echo "::warning::donmai sibling build attempt ${attempt} failed; retrying"
+            sleep 5
+          done
+          echo "::error::donmai sibling build failed after 2 attempts"
+          exit 1
+
       - name: kit toolchain local gates
+        working-directory: donmai-smokes
         run: make test-kit-toolchain
 
       - name: go vet
+        working-directory: donmai-smokes
         run: go vet ./...
 
-      # Live-daemon tests (step1..step6 in the root package) skip cleanly
-      # when the sibling ../donmai checkout is absent via
-      # harness.BuildBinary -> t.Skipf. Hosted runners don't have it,
-      # so those tests skip and the harness/* unit suite carries the run.
-      #
-      # GOWORK=off + -race matches the Makefile gate (`make test`).
+      # GOWORK=off + -race matches the Makefile gate (`make test`). The
+      # sibling ../donmai is now present, so the live-daemon steps
+      # (step1..step6 in the root package) execute instead of skipping.
+      # Tee the verbose output so the liveness guard below can assert the
+      # daemon-lifecycle canary actually ran.
       - name: go test
-        run: GOWORK=off go test -race -v ./...
+        working-directory: donmai-smokes
+        run: |
+          set -o pipefail
+          GOWORK=off go test -race -v ./... -timeout 18m 2>&1 | tee "${RUNNER_TEMP}/gotest.log"
+
+      # Gate-liveness guard (Wave 0.3 / R3.2): the daemon-lifecycle suite's
+      # reason for existing is to run the live daemon. If the canary
+      # (TestAfDaemonLifecycle, step1) SKIPPED — the exact silent failure this
+      # fix removes — or never reported PASS, fail the job even though `go test`
+      # exited 0. A deliberately-broken sibling checkout thus reds this repo.
+      - name: Guard — daemon-lifecycle smoke must actually execute
+        working-directory: donmai-smokes
+        run: |
+          LOG="${RUNNER_TEMP}/gotest.log"
+          if grep -Eq '^\s*--- SKIP: TestAfDaemonLifecycle\b' "$LOG"; then
+            echo "::error::TestAfDaemonLifecycle SKIPPED — the live-daemon lifecycle smoke did not run in hosted CI (sibling ../donmai checkout/build did not take effect). This suite's reason for existing did not execute."
+            exit 1
+          fi
+          if ! grep -Eq '^\s*--- PASS: TestAfDaemonLifecycle\b' "$LOG"; then
+            echo "::error::TestAfDaemonLifecycle did not report PASS — daemon-lifecycle coverage did not execute (0 live-daemon tests ran)."
+            exit 1
+          fi
+          echo "Gate-liveness OK: daemon-lifecycle canary executed (PASS observed, no SKIP)."
 
   lint:
     name: lint
