@@ -38,20 +38,20 @@ jobs:
       # the two-repo pattern donmai-architecture/boundary-sync.yml already uses.
       # Both repos are public, so the default GITHUB_TOKEN reads RenseiAI/donmai.
       - name: Check out donmai-smokes
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 1
           path: donmai-smokes
 
       - name: Check out sibling donmai (system under test)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: RenseiAI/donmai
           ref: main
           fetch-depth: 1
           path: donmai
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           # The smokes module (go 1.25.12, requires donmai v0.54.0) AND the
           # sibling donmai build both need a modern toolchain; sourcing it from
@@ -61,7 +61,7 @@ jobs:
           cache: true
           cache-dependency-path: donmai-smokes/go.mod
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -129,11 +129,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 1
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.23"
           cache: true
@@ -142,6 +142,6 @@ jobs:
       # Mirrors ../donmai's CI lint step (same pinned action + version),
       # matching the Makefile gate (`make lint`).
       - name: Lint
-        uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
         with:
           version: v2.11.4
