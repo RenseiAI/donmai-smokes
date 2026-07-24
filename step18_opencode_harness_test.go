@@ -132,12 +132,29 @@ type opencodeHarnessFixture struct {
 	fakeBinDir   string
 }
 
+// defaultStageBudgetSeconds is the bounded stage-budget duration cap used
+// when setupOpenCodeHarnessFixture's variadic stageBudgetSeconds is omitted
+// — right-sized for Lane A's bogus-model fixture (a synchronous, network-
+// free CLI failure). See the "Bounded stage budget" comment below for why
+// this exists at all; Lane-B callers (step18_opencode_serve_lane_test.go)
+// pass a larger explicit value because a real `opencode serve` child boot +
+// health poll takes materially longer than a one-shot CLI failure.
+const defaultStageBudgetSeconds = 8
+
 // setupOpenCodeHarnessFixture builds the donmai binary from
 // openCodeSourceDir() and stands up the daemon-control fixture. Skips
 // cleanly when the source checkout is unavailable or predates the
 // probe.go version-pin enforcement this smoke lane pins against.
-func setupOpenCodeHarnessFixture(t *testing.T, testName string, resolvedProfile map[string]any) *opencodeHarnessFixture {
+// stageBudgetSeconds is variadic and optional: omitted (Lane A's callers)
+// defaults to defaultStageBudgetSeconds; Lane B passes an explicit larger
+// value.
+func setupOpenCodeHarnessFixture(t *testing.T, testName string, resolvedProfile map[string]any, stageBudgetSeconds ...int) *opencodeHarnessFixture {
 	t.Helper()
+
+	budget := defaultStageBudgetSeconds
+	if len(stageBudgetSeconds) > 0 && stageBudgetSeconds[0] > 0 {
+		budget = stageBudgetSeconds[0]
+	}
 
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not on PATH")
@@ -191,10 +208,13 @@ func setupOpenCodeHarnessFixture(t *testing.T, testName string, resolvedProfile 
 				// runner's own steering/retry loop keeps respawning it
 				// indefinitely rather than settling on a terminal
 				// Result (observed empirically — a fixture gap, not an
-				// opencode adapter behavior). A short duration cap
-				// gives a real, bounded FailureBudgetExceeded Result
-				// instead of an unbounded retry loop.
-				"stageBudget": map[string]any{"maxDurationSeconds": 8},
+				// opencode adapter behavior). A duration cap gives a
+				// real, bounded FailureBudgetExceeded Result instead of
+				// an unbounded retry loop. budget defaults to
+				// defaultStageBudgetSeconds (Lane A) or the caller's
+				// explicit override (Lane B needs more headroom for a
+				// real `opencode serve` child boot + health poll).
+				"stageBudget": map[string]any{"maxDurationSeconds": budget},
 			})
 			return
 		}
