@@ -28,7 +28,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [blacksmith-4vcpu-ubuntu-2404, macos-latest]
 
     steps:
       # Two-repo checkout so the live-daemon smokes actually run instead of
@@ -152,7 +152,7 @@ jobs:
 
   lint:
     name: lint
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
