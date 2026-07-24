@@ -2,113 +2,88 @@ package smokes
 
 // step20_pi_harness_test.go — pi harness smoke lane
 // (runs/2026-07-21-open-harness-strategy/09-design-pi-adapter.md §8;
-// 12-work-breakdown.md W2b's completion note + W2b follow-up: the pi
-// provider is now registered in donmai's agent-run ctor list — see
-// harness/pi_install.go's package doc and the donmai PR immediately
-// preceding this one — so a `donmai agent run` session (and this
-// black-box smoke, which only ever drives the compiled binary's CLI
-// surface, never donmai as a Go library, per AGENTS.md) can reach
-// pi.New()/Spawn() at all.
+// 12-work-breakdown.md W2b). The pi provider is registered in donmai's
+// agent-run ctor list (donmai#214), so a `donmai agent run` session (and this
+// black-box smoke, which only ever drives the compiled binary's CLI surface,
+// never donmai as a Go library, per AGENTS.md) can reach pi.New()/Spawn().
 //
-// # A major real-binary finding: the pi RPC/extension protocol donmai's
-// # adapter targets does not match the real pinned binary
+// # The pi RPC/extension protocol now matches the real pinned binary
 //
-// donmai's provider/harness/pi package (and its embedded TypeScript policy
-// extension, extensions/donmai-policy.ts) was built against the design
-// doc's (09-design-pi-adapter.md) own description of pi's RPC and
-// extension-UI protocol. Its own doc.go and probe.go candidly flag this as
-// UNVERIFIED-LOCALLY ("pi --version was absent from the authoring host").
-// Installing the REAL pinned binary (@earendil-works/pi-coding-agent@
-// 0.80.10) for this smoke and reading its BUNDLED, authoritative protocol
-// docs (docs/rpc.md, docs/extensions.md — shipped inside the npm package
-// itself, not third-party) surfaces concrete, verified mismatches:
+// donmai's provider/harness/pi adapter (and its embedded TypeScript policy
+// extension, extensions/donmai-policy.ts) was originally built against the
+// design doc's DESCRIPTION of pi's protocol, which did not match the real
+// pinned binary (@earendil-works/pi-coding-agent@0.80.10). That gap was found
+// and then FIXED in donmai#215 ("fix(pi): speak the real pi 0.80.10 RPC +
+// extension protocol"), verified against the binary's bundled docs/rpc.md +
+// docs/extensions.md and live `pi --mode rpc` probes. The corrected protocol:
 //
-//  1. Command envelope key: donmai sends {"command": "prompt", "text": ...}
-//     (pi.go/handle.go, throughout). The real wire protocol uses
-//     {"type": "prompt", "message": ...} — confirmed by directly piping
-//     both shapes into a real `pi --mode rpc` process: the "command" key
-//     produces {"type":"response","success":false,"error":"Unknown
-//     command: undefined"}; only the "type" key is recognized at all.
-//  2. get_entries (the Resume/cursor-replay command, design §4): donmai
-//     sends {"command":"get_entries","session":sessionID,"since":
-//     sessionID} — besides the wrong envelope key, real pi's get_entries
-//     takes no "session" field (docs/rpc.md §get_entries): it operates on
-//     whatever session is already loaded (selected via the CLI's
-//     --session/--resume flags, not an RPC parameter), and "since" is an
-//     ENTRY id (a cursor within that session), not the session id itself.
-//  3. set_model: donmai sends {"command":"set_model","model":"donmai/"+
-//     model}. Real pi wants {"type":"set_model","provider":...,
-//     "modelId":...} — two separate fields, not one combined string.
-//  4. Extension UI protocol (the entire trust boundary, design §5): donmai's
-//     embedded extensions/donmai-policy.ts calls a fictional
-//     `pi.ui.request({type: "donmai.handshake"|"donmai.adjudicate", ...})`
-//     and `pi.defineTool({name, override: true, run(args, orig)})`. Real
-//     pi's documented extension API (docs/extensions.md) has neither
-//     method: tool interception is `pi.on("tool_call", async (event, ctx)
-//     => ({block: true, reason}))`, and the only extension_ui_request
-//     "method" values are the fixed dialog/fire-and-forget set (select,
-//     confirm, input, editor, notify, setStatus, setWidget, setTitle,
-//     set_editor_text — docs/rpc.md "Extension UI Protocol"). There is no
-//     generic custom-request channel a `pi.ui.request({type: "donmai.…"})`
-//     call could ride on.
+//   - Commands are keyed "type" (not "command"); prompt/steer/follow_up carry
+//     "message"; set_model uses provider+modelId; extension_ui_response carries
+//     a top-level "value".
+//   - The session id comes from the get_state response (agent_start has none);
+//     the terminal is agent_settled (not agent_end).
+//   - The trust boundary is built on pi's REAL extension API: a
+//     pi.on("tool_call") blocking hook that round-trips each guarded tool to
+//     the Go policy engine over ctx.ui.input, plus a session_start handshake
+//     carrying a per-session env token + the extension's self-SHA (both
+//     verified Go-side, fail-closed). Loaded via `-e <path> --no-extensions`.
 //
-// The practical consequence: Spawn's fail-closed handshake gate (pi.go
-// launch(), design §2 step 3 — "no handshake within 10s ⇒ kill child,
-// return agent.ErrSpawnFailed") ALWAYS times out against the real binary,
-// because the embedded extension never emits anything the real protocol
-// recognizes as a request pi will forward, and even if it did, the Go side
-// replies in a shape ({"command":"extension_ui_response","response":
-// {...}}) the real protocol does not expect either (docs/rpc.md: replies
-// are {"type":"extension_ui_response","id":...,"value"|"confirmed"|
-// "cancelled":...} at the top level, not nested under "response"). Spawn
-// NEVER completes handshake, so it never reaches the RPC commands named
-// above at all.
+// # Two things this smoke had to fix before it could exercise the real binary
 //
-// This means smoke items 1-10 (09 §8) are not really "unit-green" in any
-// sense that predicts real-binary behavior — every existing fixture (this
-// repo's own future ones, and donmai's pipe-stub unit tests) encodes the
-// SAME wrong protocol assumptions the design doc made, so the mismatch
-// only surfaces against the real binary. This is the identical disease
-// class the opencode Lane-B SSE "properties" vs "data" bug was (see
-// donmai#211, merged), except broader: it blocks EVERY item, not one event
-// type, because it blocks Spawn's handshake gate itself.
+//  1. `pi` is a `#!/usr/bin/env node` script, so it cannot exec unless `node`
+//     is on the PATH `donmai agent run` hands the child. The original lane's
+//     restricted PATH (fakeBinDir + pi dir + /usr/bin:/bin:...) had no node,
+//     so the real pi process died at exec, the pi child's stdout closed before
+//     any handshake, and Spawn failed with "policy extension failed to load:
+//     event stream closed before handshake" — which the original lane MISREAD
+//     as the documented "protocol gap". It never actually ran pi. This lane
+//     now puts node's directory on the child PATH (nodeBinDir).
+//  2. pi resolves its --model against its built-in catalog at STARTUP, before
+//     session_start/the handshake. A bogus model (the original "smoke-test-
+//     model") makes pi exit with "Model not found" before the handshake can
+//     fire — again masquerading as a spawn failure. This lane uses a real
+//     catalog model (piCatalogModel, override with DONMAI_SMOKES_PI_MODEL) so
+//     the session actually starts and the handshake completes.
 //
-// Given this, items 3/6/7/9 (the real-binary complements this lane owns
-// per 12-work-breakdown.md W2b) cannot be exercised as designed: there is
-// no live session to prompt, steer, resume, or pin a provider on. Fixing
-// this is a real, scoped, but non-trivial rewrite: donmai's rpc.go command
-// construction (pi.go/handle.go send sites) needs the "type" envelope, and
-// extensions/donmai-policy.ts needs to be rebuilt against pi.on("tool_call")
-// + pi.registerTool() + ctx.ui.confirm() (a real, viable mechanism — pi
-// DOES support synchronous tool-call blocking via the event handler's
-// return value, so the trust boundary is buildable, just not as currently
-// coded). That rewrite is out of scope for this lane; it is recorded here,
-// verified, and dated so it is not silently lost.
-//
-// What THIS lane covers instead, honestly:
+// # What this lane validates against the real 0.80.10 binary
 //
 //   - TestPiHarnessSmoke_VersionPinGuard: construction-time version-pin
-//     enforcement (probe.go) — does not depend on the RPC protocol at all,
-//     proven green against the real pinned binary.
-//   - TestPiHarnessSmoke_RealBinary_Teardown (item 8): SIGINT while Spawn
-//     is blocked in the handshake wait — pi.go's launch() explicitly kills
-//     the child on ctx.Done() even pre-handshake, so this is real,
-//     protocol-independent, verified coverage of "no orphan pi process."
-//   - TestPiHarnessSmoke_RealBinary_HandshakeFailsClosed_KnownProtocolGap:
-//     a red-then-green-when-fixed regression proof — the SPECIFIC,
-//     verified failure this smoke expects (a spawn failure whose message
-//     names the policy-extension handshake timeout) is asserted
-//     explicitly. If donmai's protocol implementation is ever corrected
-//     and Spawn starts completing handshake against the real binary, this
-//     assertion FAILS LOUDLY (an unexpected success, not a silent skip) —
-//     the intended signal that items 3/6/7/9 (and 1/2/4/5/10's real
-//     validity) can be attempted for real.
+//     enforcement (protocol-independent).
+//   - TestPiHarnessSmoke_RealBinary_HandshakeCompletes: the load-bearing
+//     flip. With node on PATH and a resolvable model, `donmai agent run`
+//     spawns real pi, the fail-closed handshake COMPLETES (token+SHA verified),
+//     and the session proceeds PAST Spawn into a real model turn — so the run
+//     does NOT fail with "policy extension failed to load" / spawn-failed. It
+//     instead runs until the stage budget (the model turn cannot complete
+//     without a real provider credential — the established stageBudget /
+//     unresolvable-turn precedent). A regression to the old protocol would
+//     re-introduce the spawn-failure and fail this test loudly.
+//   - TestPiHarnessSmoke_RealBinary_Teardown (09 §8 item 8): SIGINT mid-run,
+//     no orphan `pi --mode rpc` process.
+//
+// # Deferred — genuinely blocked on a completed model turn (documented, not
+// # silently skipped)
+//
+// Items 3 (full prompt→assistant-text round trip), 6 (steer/queue mid-turn),
+// 7 (resume/cursor replay), and 9's pin ROUND-TRIP all need a model turn that
+// actually completes. Through the black-box `donmai agent run` path that needs
+// EITHER a real provider credential (out of bounds: cost + the OSS no-creds
+// boundary) OR a stub OpenAI-compatible endpoint that pi is routed to — and
+// routing pi to a stub needs donmai to thread the resolved Endpoint from
+// resolvedProfile into the pi provider (runner/spec_translation.go does not set
+// Spec.Endpoint today; the pi provider only pins `--provider donmai --model` /
+// registers the "donmai" provider when an Endpoint with a BaseURL is present).
+// That endpoint-from-resolvedProfile wiring — analogous to the opencode
+// preferServer hint (donmai#209) — is the follow-up that unblocks a completed
+// turn and, with it, items 3/6/7/9 for real. The trust-boundary logic those
+// items exercise (handshake, Go-side adjudication, bypass monitor, env hygiene)
+// is unit-green in donmai's provider/harness/pi against real wire shapes.
 //
 // # OSS boundary
 //
-// Same fixture shape as step18: an httptest daemon-control fixture serving
-// only /api/daemon/sessions/<id>, no SaaS control plane. pi installs from
-// the public npm registry via harness.EnsurePiBinary.
+// Same fixture shape as step18: an httptest daemon-control fixture serving only
+// /api/daemon/sessions/<id>, no SaaS control plane. pi installs from the public
+// npm registry via harness.EnsurePiBinary. No provider credentials are used.
 
 import (
 	"context"
@@ -124,6 +99,20 @@ import (
 
 	afh "github.com/RenseiAI/donmai-smokes/harness"
 )
+
+// piCatalogModel is a model id pi's built-in catalog resolves at startup so the
+// session can start and the handshake can fire. It needs NO provider credential
+// to resolve (the turn itself would need one, which this lane deliberately does
+// not supply). Override with DONMAI_SMOKES_PI_MODEL if catalog churn retires it
+// (same class as the version pin — pi ships releases frequently).
+const piCatalogModel = "gpt-5.5"
+
+func piModel() string {
+	if v := strings.TrimSpace(os.Getenv("DONMAI_SMOKES_PI_MODEL")); v != "" {
+		return v
+	}
+	return piCatalogModel
+}
 
 // oldPiVersionScript is a fake `pi` that only answers --version (with a
 // version below MinVersion) — construction must fail before anything else
@@ -161,6 +150,16 @@ exit 1
 	}
 }
 
+// nodeBinDir returns the directory containing `node`, or "" if node is not on
+// PATH. `pi` is a node script; without node on the PATH `donmai agent run`
+// hands the child, the real pi binary cannot exec at all.
+func nodeBinDir() string {
+	if p, err := exec.LookPath("node"); err == nil {
+		return filepath.Dir(p)
+	}
+	return ""
+}
+
 // piSourceDir resolves the donmai checkout this smoke builds from, mirroring
 // step18's openCodeSourceDir: DONMAI_ARCH_SOURCE_DIR wins, falling back to
 // the canonical ../donmai sibling.
@@ -178,6 +177,7 @@ type piHarnessFixture struct {
 	wtParent     string
 	home         string
 	fakeBinDir   string
+	nodeDir      string
 }
 
 // setupPiHarnessFixture builds the donmai binary from piSourceDir() and
@@ -234,12 +234,11 @@ func setupPiHarnessFixture(t *testing.T, testName string, resolvedProfile map[st
 				"authToken":       "smoke-token",
 				"platformUrl":     srv.URL,
 				"resolvedProfile": resolvedProfile,
-				// Bounded stage budget mirrors step18's own rationale: without
-				// one, a session that never reaches a terminal event (pi's
-				// handshake gate fails closed and Spawn errors quickly here,
-				// but this is defense-in-depth against the runner's own
-				// retry/steering loop) could run indefinitely.
-				"stageBudget": map[string]any{"maxDurationSeconds": 30},
+				// Bounded stage budget: the model turn cannot complete without a
+				// provider credential (this lane supplies none), so the session
+				// runs until this budget rather than reaching a natural terminal.
+				// Kept short so the handshake-completes assertion is fast.
+				"stageBudget": map[string]any{"maxDurationSeconds": 8},
 			})
 			return
 		}
@@ -259,15 +258,25 @@ func setupPiHarnessFixture(t *testing.T, testName string, resolvedProfile map[st
 		wtParent:     wtParent,
 		home:         home,
 		fakeBinDir:   fakeBinDir,
+		nodeDir:      nodeBinDir(),
 	}
 }
 
-// run drives `donmai agent run` against the fixture with the given PATH.
+// pathEntries assembles the PATH `donmai agent run` hands the child: the fake
+// shim dir, any caller-supplied dirs (the pi binary dir), node's dir (pi is a
+// node script), then the system dirs.
+func (f *piHarnessFixture) pathEntries(extra ...string) []string {
+	entries := append([]string{f.fakeBinDir}, extra...)
+	if f.nodeDir != "" {
+		entries = append(entries, f.nodeDir)
+	}
+	return append(entries, "/usr/bin", "/bin", "/usr/sbin", "/sbin")
+}
+
+// run drives `donmai agent run` against the fixture with the given extra PATH
+// dirs (typically the pi binary dir).
 func (f *piHarnessFixture) run(t *testing.T, ctx context.Context, extraPathDirs ...string) (stdout, stderr string, runErr error) {
 	t.Helper()
-
-	pathEntries := append([]string{f.fakeBinDir}, extraPathDirs...)
-	pathEntries = append(pathEntries, "/usr/bin", "/bin", "/usr/sbin", "/sbin")
 
 	cmd := exec.CommandContext(
 		ctx, f.donmaiBinary, //nolint:gosec // binary + flags are test-controlled.
@@ -276,6 +285,7 @@ func (f *piHarnessFixture) run(t *testing.T, ctx context.Context, extraPathDirs 
 		"--daemon-url", f.daemonSrv.URL,
 		"--worktree-dir", f.wtParent,
 	)
+	pathEntries := f.pathEntries(extraPathDirs...)
 	cmd.Env = []string{
 		"PATH=" + strings.Join(pathEntries, string(os.PathListSeparator)),
 		"HOME=" + f.home,
@@ -293,8 +303,21 @@ func (f *piHarnessFixture) run(t *testing.T, ctx context.Context, extraPathDirs 
 func piResolvedProfile() map[string]any {
 	return map[string]any{
 		"provider": "pi",
-		"model":    "smoke-test-model",
+		"model":    piModel(),
 	}
+}
+
+// resolvePiBinDir installs/resolves the pinned pi binary and returns a PATH
+// directory under which it is reachable as the literal name `pi`.
+func resolvePiBinDir(t *testing.T) string {
+	t.Helper()
+	piBin := afh.EnsurePiBinary(t)
+	if filepath.Base(piBin) == "pi" {
+		return filepath.Dir(piBin)
+	}
+	aliasDir := t.TempDir()
+	linkPiAlias(t, piBin, aliasDir)
+	return aliasDir
 }
 
 // TestPiHarnessSmoke_VersionPinGuard proves a below-MinVersion `pi` on PATH
@@ -323,16 +346,20 @@ func TestPiHarnessSmoke_VersionPinGuard(t *testing.T) {
 	}
 }
 
-// TestPiHarnessSmoke_RealBinary_HandshakeFailsClosed_KnownProtocolGap is a
-// red-then-green-when-fixed regression proof for the wire-protocol
-// mismatch documented in this file's package doc. It asserts the SPECIFIC,
-// verified failure mode: Spawn's fail-closed handshake gate times out
-// against the real binary (policy extension never completes a handshake
-// the real protocol recognizes). If donmai's pi adapter is ever corrected
-// to speak the real RPC/extension-UI protocol, this assertion fails loudly
-// (unexpected success) instead of silently staying green for the wrong
-// reason — the signal that items 3/6/7/9 can then be attempted for real.
-func TestPiHarnessSmoke_RealBinary_HandshakeFailsClosed_KnownProtocolGap(t *testing.T) {
+// TestPiHarnessSmoke_RealBinary_HandshakeCompletes is the load-bearing
+// real-binary check that the pi RPC/extension protocol donmai speaks matches
+// the real 0.80.10 binary. With node on the child PATH and a resolvable model,
+// `donmai agent run` spawns real pi, the fail-closed handshake COMPLETES
+// (per-session token + extension self-SHA verified Go-side), and the session
+// proceeds PAST Spawn into a real model turn.
+//
+// The assertion is the flip: the run must NOT fail with "policy extension
+// failed to load" / failureMode "spawn-failed" (the old, now-fixed protocol
+// gap). It instead runs until the short stage budget, because the model turn
+// cannot complete without a provider credential this lane deliberately does not
+// supply. A regression to the old protocol re-introduces the spawn failure and
+// fails this test loudly.
+func TestPiHarnessSmoke_RealBinary_HandshakeCompletes(t *testing.T) {
 	if testing.Short() {
 		t.Skip("end-to-end agent-run smoke; skipped under -short")
 	}
@@ -340,26 +367,19 @@ func TestPiHarnessSmoke_RealBinary_HandshakeFailsClosed_KnownProtocolGap(t *test
 		t.Skip("DONMAI_SMOKES_SKIP_LIVE_DAEMON=1 — operator opted out of live-process smokes")
 	}
 
-	piBin := afh.EnsurePiBinary(t)
-	piBinDir := filepath.Dir(piBin)
-	binDirForPath := piBinDir
-	if filepath.Base(piBin) != "pi" {
-		aliasDir := t.TempDir()
-		linkPiAlias(t, piBin, aliasDir)
-		binDirForPath = aliasDir
-	}
+	piBinDir := resolvePiBinDir(t)
 
 	f := setupPiHarnessFixture(t, "handshake", piResolvedProfile())
+	if f.nodeDir == "" {
+		t.Skip("node not on PATH — pi is a node script and cannot exec; skipping real-binary handshake check")
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	stdout, stderr, runErr := f.run(t, ctx, binDirForPath)
+	stdout, stderr, runErr := f.run(t, ctx, piBinDir)
 
 	if strings.Contains(stderr, "below the minimum supported version") {
 		t.Fatalf("unexpected version-pin rejection of the real pinned binary; stderr:\n%s", stderr)
-	}
-	if runErr == nil {
-		t.Fatalf("donmai agent run: want a non-nil error (spawn failure expected — see package doc)\n--- stdout ---\n%s\n--- stderr ---\n%s", stdout, stderr)
 	}
 
 	var res struct {
@@ -371,24 +391,31 @@ func TestPiHarnessSmoke_RealBinary_HandshakeFailsClosed_KnownProtocolGap(t *test
 		t.Fatalf("decode agent-run Result JSON: %v\n--- stdout ---\n%s\n--- stderr ---\n%s", err, stdout, stderr)
 	}
 
-	const wantSubstring = "policy extension failed to load"
-	if !strings.Contains(res.Error, wantSubstring) {
-		t.Fatalf("Result.Error = %q; want it to contain %q (the documented, verified real-binary protocol gap — "+
-			"if this changed, the pi adapter's RPC/extension protocol may have been fixed: re-read this file's "+
-			"package doc and, if so, promote items 3/6/7/9 out of skip)\n--- stdout ---\n%s\n--- stderr ---\n%s",
-			res.Error, wantSubstring, stdout, stderr)
+	// The flip: the handshake completed, so the run did NOT fail at spawn.
+	const spawnGap = "policy extension failed to load"
+	if strings.Contains(res.Error, spawnGap) {
+		t.Fatalf("run failed with %q — the pi handshake did NOT complete against the real binary.\n"+
+			"If node is on PATH and the model resolves, this means a protocol regression (donmai#215 fixed this).\n"+
+			"Result.Error=%q status=%q failureMode=%q\n--- stdout ---\n%s\n--- stderr ---\n%s",
+			spawnGap, res.Error, res.Status, res.FailureMode, stdout, stderr)
 	}
-	t.Logf("confirmed known protocol gap: Result.Error=%q status=%q failureMode=%q", res.Error, res.Status, res.FailureMode)
+	if res.FailureMode == "spawn-failed" {
+		t.Fatalf("failureMode=spawn-failed — the pi session never started (handshake gate).\n"+
+			"Result.Error=%q status=%q\n--- stdout ---\n%s\n--- stderr ---\n%s",
+			res.Error, res.Status, stdout, stderr)
+	}
+	// runErr is expected non-nil here (the run ends unsuccessfully at the budget /
+	// uncredentialed model turn) — that is the point: it got PAST the handshake.
+	_ = runErr
+	t.Logf("handshake completed against real pi; run reached a model turn — status=%q failureMode=%q error=%q",
+		res.Status, res.FailureMode, res.Error)
 }
 
 // TestPiHarnessSmoke_RealBinary_Teardown drives the REAL pinned pi binary,
-// sends SIGTERM mid-run (during Spawn's handshake wait — the handshake
-// never completes per the documented protocol gap, so the process is
-// reliably still inside that wait when the signal lands), and asserts the
-// child process is gone afterward (09 §8 item 8: "Stop mid-run; no orphan
-// processes"). pi.go's launch() explicitly kills the child on ctx.Done()
-// even pre-handshake (`case <-ctx.Done(): _ = h.Stop(...)`), so this
-// exercises real, protocol-independent teardown coverage.
+// sends SIGTERM mid-run, and asserts the child pi process is gone afterward
+// (09 §8 item 8: "Stop mid-run; no orphan processes"). With node on PATH the
+// pi child really runs (handshake completes, model turn in flight), so this
+// exercises real mid-turn teardown.
 func TestPiHarnessSmoke_RealBinary_Teardown(t *testing.T) {
 	if testing.Short() {
 		t.Skip("end-to-end agent-run smoke; skipped under -short")
@@ -397,18 +424,14 @@ func TestPiHarnessSmoke_RealBinary_Teardown(t *testing.T) {
 		t.Skip("DONMAI_SMOKES_SKIP_LIVE_DAEMON=1 — operator opted out of live-process smokes")
 	}
 
-	piBin := afh.EnsurePiBinary(t)
-	piBinDir := filepath.Dir(piBin)
-	binDirForPath := piBinDir
-	if filepath.Base(piBin) != "pi" {
-		aliasDir := t.TempDir()
-		linkPiAlias(t, piBin, aliasDir)
-		binDirForPath = aliasDir
-	}
+	piBinDir := resolvePiBinDir(t)
 
 	f := setupPiHarnessFixture(t, "teardown", piResolvedProfile())
+	if f.nodeDir == "" {
+		t.Skip("node not on PATH — pi is a node script and cannot exec; skipping real-binary teardown check")
+	}
 
-	pathEntries := append([]string{f.fakeBinDir, binDirForPath}, "/usr/bin", "/bin", "/usr/sbin", "/sbin")
+	pathEntries := f.pathEntries(piBinDir)
 	cmd := exec.Command(
 		f.donmaiBinary, //nolint:gosec // binary + flags are test-controlled.
 		"agent", "run",
@@ -432,10 +455,9 @@ func TestPiHarnessSmoke_RealBinary_Teardown(t *testing.T) {
 		t.Fatalf("start donmai agent run: %v", err)
 	}
 
-	// Give it a moment to reach pi's Spawn (materialize extension, exec the
-	// child, enter the handshake wait), then SIGTERM the donmai process
-	// (which owns the pi child) mid-flight.
-	time.Sleep(1 * time.Second)
+	// Give it time to reach pi's Spawn, complete the handshake, and enter the
+	// model turn, then SIGTERM the donmai process (which owns the pi child).
+	time.Sleep(3 * time.Second)
 	if err := cmd.Process.Signal(os.Interrupt); err != nil {
 		t.Fatalf("signal donmai agent run: %v", err)
 	}
@@ -449,6 +471,9 @@ func TestPiHarnessSmoke_RealBinary_Teardown(t *testing.T) {
 		t.Fatal("donmai agent run did not exit within 30s of SIGINT (mid-run teardown hung)")
 	}
 
+	// Allow a moment for the SIGTERM→SIGKILL escalation over the pi child's
+	// process group to reap it.
+	time.Sleep(2 * time.Second)
 	if _, err := exec.LookPath("pgrep"); err == nil {
 		out, _ := exec.Command("pgrep", "-f", "pi --mode rpc").CombinedOutput() //nolint:gosec // fixed args.
 		if strings.TrimSpace(string(out)) != "" {
