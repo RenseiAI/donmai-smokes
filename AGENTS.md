@@ -66,7 +66,7 @@ each result line in your report.
 - Tests: stdlib `testing`, table-driven, no testify; `httptest` for HTTP fixtures (divergence breaks `../donmai` parity).
 - Errors: `fmt.Errorf("context: %w", err)`; step context via `harness.WrapStep`. Never `panic`, never `log.Fatal` (kills the whole suite).
 - GOWORK is two-sided: tests run `GOWORK=off`; the subprocess building donmai gets `GOWORK=` (cleared) so `../donmai`'s own `go.mod` resolves — never "fix" either (workspace overlay corrupts both resolutions).
-- Every smoke `t.Skip`s cleanly when `../donmai` or the Go toolchain is absent (hosted CI has no sibling).
+- Every smoke `t.Skip`s cleanly when `../donmai` or the Go toolchain is absent (local checkouts without a sibling; hosted CI now checks one out).
 - New live-daemon smokes honor `-short` AND `DONMAI_SMOKES_SKIP_LIVE_DAEMON=1` — copy step1's skip block (operators rely on the opt-out).
 - Skip knobs are the CI-operator contract — never repurpose or drop one: `DONMAI_SMOKES_SKIP_LIVE_DAEMON=1` (live-daemon steps), `DONMAI_SMOKES_SKIP_INSTALLER=1` (install lifecycle), `DONMAI_SMOKES_SKIP_LIVE_API=1` (live external-API steps, step15). The opencode harness lane (step18) additionally honors `DONMAI_SMOKES_OPENCODE_BIN` (point at a pre-installed binary, skipping resolution/install entirely) and `DONMAI_SMOKES_OPENCODE_PIN` (override the installed/accepted version — used by the pin-bump protocol, `donmai-architecture` 07-design-opencode-spawn.md §8).
 - `DONMAI_ARCH_SOURCE_DIR` points the step16 build at an in-flight source port — keep it honored (operators test unmerged ports with it).
@@ -108,8 +108,16 @@ smoke, an env-var read, or an outbound URL.
   bare install test can clobber your real developer daemon service.
 - `kit-toolchain-e2b/run.sh` is a gated cloud-sandbox kit-provisioning smoke:
   requires `E2B_API_KEY`, exits 0 (skip) without it — it never runs by accident.
-- Hosted CI has no `../donmai` sibling: live steps skip via
-  `harness.BuildBinary` → `t.Skipf`; the `harness/*` unit suite carries the run.
+- Hosted CI DOES check out `../donmai` (since `ci: run the daemon-lifecycle
+  smokes in hosted CI`, Wave 0.3), so the live steps execute there. Only a
+  local checkout without a sibling skips them via `harness.BuildBinary` →
+  `t.Skipf`. Every run publishes a PASS/FAIL/SKIP tally to the job summary —
+  check it before assuming a green run exercised what you think it did.
+- The sibling is pinned to `ref: main`, a ROLLING target. A smoke asserting
+  donmai behaviour that has not merged upstream yet will fail, then pass on a
+  re-run once it does — that is NOT a flake. The run's job summary records the
+  exact donmai SHA under test; check the assertion's upstream change is in it
+  before hunting for a race.
 
 ## Hard stops
 

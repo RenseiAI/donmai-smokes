@@ -51,6 +51,36 @@ jobs:
           fetch-depth: 1
           path: donmai
 
+      # `ref: main` is a ROLLING target: this suite is pinned to whatever
+      # donmai/main happens to be at job-start, not to the SHA the smokes
+      # author was developing against. A smoke that asserts behaviour still
+      # in flight upstream therefore fails, and a re-run minutes later passes
+      # once the donmai PR merges — indistinguishable from a flake unless the
+      # SHA under test is recorded. (Observed twice: runs 30157154869 and
+      # 30114625388, both "fail then re-run green" on an unchanged smokes SHA.)
+      # Record the provenance up front so any failure is self-diagnosing.
+      - name: Record donmai SHA under test
+        working-directory: donmai
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          subject="$(git log -1 --pretty=%s)"
+          committed="$(git log -1 --pretty=%cI)"
+          echo "DONMAI_SHA_UNDER_TEST=${sha}" >> "$GITHUB_ENV"
+          {
+            echo "### donmai under test (\`ref: main\`, rolling)"
+            echo
+            echo "| field | value |"
+            echo "| --- | --- |"
+            echo "| SHA | \`${sha}\` |"
+            echo "| subject | ${subject} |"
+            echo "| committed | ${committed} |"
+            echo
+            echo "If a smoke asserting new donmai behaviour failed here, check that its"
+            echo "upstream change is actually contained in this SHA before calling it a flake."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "donmai under test: ${sha} — ${subject} (${committed})"
+
       - uses: actions/setup-go@v5
         with:
           # The smokes module (go 1.25.12, requires donmai v0.54.0) AND the
@@ -131,6 +161,49 @@ jobs:
           set -o pipefail
           GOWORK=off go test -race -v ./... -timeout 18m 2>&1 | tee "${RUNNER_TEMP}/gotest.log"
 
+      # Skip-count visibility (REN-1753 0.4a). `go test` exits 0 whether a
+      # test PASSED or SKIPPED, so coverage can silently drain away one skip
+      # knob at a time — this repo has five of them (DONMAI_SMOKES_SKIP_*) and
+      # every live smoke is contractually required to skip cleanly. Publish the
+      # PASS/FAIL/SKIP tally plus every skipped test name to the job summary so
+      # an accumulating skip set is visible on the run page instead of buried
+      # in 3 MB of -v output. Reporting only: this step never fails the job.
+      # Runs on failure too — a failed run's skip set is the interesting one.
+      - name: Test outcome tally (pass / fail / skip)
+        if: always()
+        working-directory: donmai-smokes
+        run: |
+          set -uo pipefail
+          LOG="${RUNNER_TEMP}/gotest.log"
+          if [ ! -f "$LOG" ]; then
+            echo "no gotest.log (suite did not run) — nothing to tally"
+            exit 0
+          fi
+          pass=$(grep -cE '^\s*--- PASS: ' "$LOG" || true)
+          fail=$(grep -cE '^\s*--- FAIL: ' "$LOG" || true)
+          skip=$(grep -cE '^\s*--- SKIP: ' "$LOG" || true)
+          {
+            echo "### Test outcomes (${{ matrix.os }}) — includes subtests"
+            echo
+            echo "| PASS | FAIL | SKIP |"
+            echo "| ---: | ---: | ---: |"
+            echo "| ${pass} | ${fail} | ${skip} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$skip" -gt 0 ]; then
+            {
+              echo
+              echo "<details><summary>${skip} skipped test(s)</summary>"
+              echo
+              echo '```'
+              grep -E '^\s*--- SKIP: ' "$LOG" | sed -E 's/^[[:space:]]*--- SKIP: //' | sort
+              echo '```'
+              echo
+              echo "</details>"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "outcomes: PASS=${pass} FAIL=${fail} SKIP=${skip}"
+          grep -E '^\s*--- SKIP: ' "$LOG" || true
+
       # Gate-liveness guard (Wave 0.3 / R3.2): the daemon-lifecycle suite's
       # reason for existing is to run the live daemon. If the canary
       # (TestAfDaemonLifecycle, step1) SKIPPED — the exact silent failure this
@@ -141,11 +214,11 @@ jobs:
         run: |
           LOG="${RUNNER_TEMP}/gotest.log"
           if grep -Eq '^\s*--- SKIP: TestAfDaemonLifecycle\b' "$LOG"; then
-            echo "::error::TestAfDaemonLifecycle SKIPPED — the live-daemon lifecycle smoke did not run in hosted CI (sibling ../donmai checkout/build did not take effect). This suite's reason for existing did not execute."
+            echo "::error::TestAfDaemonLifecycle SKIPPED — the live-daemon lifecycle smoke did not run in hosted CI (sibling ../donmai checkout/build did not take effect, donmai@${DONMAI_SHA_UNDER_TEST:-unknown}). This suite's reason for existing did not execute."
             exit 1
           fi
           if ! grep -Eq '^\s*--- PASS: TestAfDaemonLifecycle\b' "$LOG"; then
-            echo "::error::TestAfDaemonLifecycle did not report PASS — daemon-lifecycle coverage did not execute (0 live-daemon tests ran)."
+            echo "::error::TestAfDaemonLifecycle did not report PASS — daemon-lifecycle coverage did not execute (0 live-daemon tests ran, donmai@${DONMAI_SHA_UNDER_TEST:-unknown})."
             exit 1
           fi
           echo "Gate-liveness OK: daemon-lifecycle canary executed (PASS observed, no SKIP)."
@@ -161,7 +234,13 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          # Was a hardcoded "1.23", which made every lint run download Go
+          # 1.23.12 (~7s) and then immediately download go1.25.12 again as a
+          # GOTOOLCHAIN, because this module declares `go 1.25.12` — two
+          # toolchain fetches to lint with one. Sourcing from go.mod (same fix
+          # the test job above already documents) fetches once and keeps lint's
+          # Go in lockstep with the module instead of drifting on every bump.
+          go-version-file: go.mod
           cache: true
           cache-dependency-path: go.mod
 
