@@ -61,10 +61,11 @@ func TestAfHelpDeprecationGuard(t *testing.T) {
 		t.Fatalf("build donmai binary: %v", err)
 	}
 
-	// Top-level surface — the four Wave 9 surfaces must be present
-	// alongside the pre-existing daemon/agent/dashboard/etc set. The
-	// expected names below are the union of the v0.6.x and v0.7.0
-	// shapes — every entry the donmai top-level help advertised at v0.7.0.
+	// Top-level surface — the Wave 9 surfaces must be present alongside the
+	// rest of the supported public command set. The
+	// expected names below pin the current public top-level surface. Deprecated
+	// aliases that are intentionally hidden from help are exercised directly by
+	// their compatibility smokes instead.
 	t.Run("top-level", func(t *testing.T) {
 		helpCtx, helpCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer helpCancel()
@@ -77,19 +78,19 @@ func TestAfHelpDeprecationGuard(t *testing.T) {
 			t.Fatalf("donmai --help produced no Available Commands section\n%s", out)
 		}
 
-		// Pre-existing surface (pre-Wave-9): every command MUST be
-		// present.
-		preexisting := []string{
-			"admin", "agent", "arch", "code", "completion", "daemon",
+		// Every supported public command MUST be present.
+		currentSurface := []string{
+			"admin", "agent", "arch", "code", "completion", "creds",
 			"dashboard", "fleet", "governor", "help", "linear", "logs",
-			"orchestrator", "project", "session", "status", "worker",
+			"mcp", "orchestrator", "project", "session", "status", "worker",
+			"host", "github",
 		}
 		// Wave 9 migrated surface: provider, kit, workarea, routing.
 		// These are the four daemon-targeted command trees the binary
 		// MUST advertise at v0.7.0+.
 		wave9 := []string{"provider", "kit", "workarea", "routing"}
 
-		for _, name := range append(preexisting, wave9...) {
+		for _, name := range append(currentSurface, wave9...) {
 			if _, ok := got[name]; !ok {
 				t.Errorf("donmai --help missing required top-level subcommand %q\n--- output ---\n%s",
 					name, out)
