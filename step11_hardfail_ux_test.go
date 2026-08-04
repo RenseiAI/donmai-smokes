@@ -233,10 +233,12 @@ func TestDaemonHardFailRemediation(t *testing.T) {
 	//
 	// `donmai daemon doctor` under a hermetic HOME (no launchd plist /
 	// systemd unit written) must exit non-zero and produce a message
-	// referencing `donmai daemon install` as the remediation hint.
+	// referencing `donmai host install` as the remediation hint. The daemon
+	// command remains a deprecated compatibility alias, while host is the
+	// canonical operator surface.
 	//
-	// Per afcli/daemon.go:556-557:
-	//   "service is not installed — run `<bin> daemon install`"
+	// Per the host doctor implementation:
+	//   "service is not installed — run `<bin> host install`"
 	//
 	// This sub-test is gated on darwin/linux because the installer
 	// dispatcher only supports those platforms; and on
@@ -260,8 +262,8 @@ func TestDaemonHardFailRemediation(t *testing.T) {
 		}
 
 		// Must contain the install guidance.
-		if !strings.Contains(out, "daemon install") {
-			t.Errorf("daemon doctor output does not contain 'daemon install' remediation hint\n--- output ---\n%s", out)
+		if !strings.Contains(out, "host install") {
+			t.Errorf("daemon doctor output does not contain 'host install' remediation hint\n--- output ---\n%s", out)
 		}
 
 		// The install guidance must reference `donmai` (the correct binary
