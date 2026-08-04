@@ -97,6 +97,30 @@ func TestAfHelpDeprecationGuard(t *testing.T) {
 		}
 	})
 
+	// The Linear catalog verbs are intentionally smoke-tested through help
+	// discovery only. Executing them would require an external Linear or SaaS
+	// credential, which is outside this OSS harness's boundary. This still pins
+	// that the built binary ships the routing-discovery surface.
+	t.Run("linear-catalog", func(t *testing.T) {
+		helpCtx, helpCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer helpCancel()
+
+		got, out, err := afh.ParseHelpSubcommands(helpCtx, donmaiBinary, "linear")
+		if err != nil {
+			t.Fatalf("donmai linear --help: %v\n%s", err, out)
+		}
+		for _, name := range []string{"list-projects", "list-teams"} {
+			desc, ok := got[name]
+			if !ok {
+				t.Errorf("donmai linear --help missing catalog subcommand %q\n--- output ---\n%s", name, out)
+				continue
+			}
+			if strings.TrimSpace(desc) == "" {
+				t.Errorf("donmai linear subcommand %q has empty short description\n--- output ---\n%s", name, out)
+			}
+		}
+	})
+
 	// Per-Wave-9-surface subcommand shape. Each surface has a
 	// hardcoded subcommand list per donmai's v0.7.0 CHANGELOG entry —
 	// a future commit that drops or renames a verb fires here.
