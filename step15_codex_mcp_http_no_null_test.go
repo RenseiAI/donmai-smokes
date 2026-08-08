@@ -1,7 +1,7 @@
 package smokes
 
 // step15_codex_mcp_http_no_null_test.go — regression guard for the
-// codex MCP-config args:null bug fixed in donmai PR #106 (SUP-1840).
+// codex MCP-config args:null bug fixed in donmai PR #106.
 //
 // Background:
 //
@@ -14,7 +14,7 @@ package smokes
 //
 //	    invalid value: invalid type: null, expected any valid TOML value
 //
-//	causing failureMode:"spawn-failed" / "Session failed" (SUP-1840).
+//	causing failureMode:"spawn-failed" / "Session failed".
 //	The fix delegates to runtime/mcp.BuildConfigFile which uses omitempty
 //	tags and proper transport dispatch.
 //
@@ -301,7 +301,7 @@ func TestCodexMCPConfig_HTTPTransport(t *testing.T) {
 
 // TestCodexMCPConfig_Mixed asserts that a mixed config (one http server +
 // one stdio server with no args) produces JSON with no null values
-// anywhere. This is the exact pre-fix regression shape from SUP-1840:
+// anywhere. This is the exact pre-fix regression shape:
 // the config/batchWrite body that codex rejected.
 func TestCodexMCPConfig_Mixed(t *testing.T) {
 	entries := map[string]codexMCPEntry{
@@ -395,7 +395,7 @@ func codexBinaryGate(t *testing.T) string {
 //   - One http-transport MCP server (type:"http", url, Authorization header).
 //   - One stdio MCP server with no args.
 //
-// These are the exact shapes that triggered the SUP-1840 failure.
+// These are the exact shapes that triggered the pre-fix failure.
 //
 // GATE: skipped (not failed) when codex is absent. See codexBinaryGate.
 func TestCodexMCPConfigLiveGate(t *testing.T) {

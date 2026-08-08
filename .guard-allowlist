@@ -1,0 +1,49 @@
+# guard-b allowlist for donmai-smokes — same grammar as the engine's own
+# header (scripts/guard-b-lint.sh), three or four ' :: '-separated fields:
+#
+#     <RULE_ID>[,<RULE_ID>...] :: <location-regex> :: <match-regex>[ :: <line-regex>]
+#
+# match-regex binds THE TEXT THE RULE MATCHED, not the surrounding line — see
+# scripts/guard-b-lint.sh's header for why. Where a file names a banned token
+# more than once for different reasons, the location-regex pins the exact
+# line number instead, which is a tighter bind than a line-regex would be.
+#
+# NOTE ON THE [BRACKETS]: this file is itself scanned, so every entry below
+# spells the banned literal with one bracketed letter (`Rens[e]i`, `/api/cl[i]/`)
+# — the same convention scripts/guard-b-lint.sh and its own .guard-allowlist
+# use. This changes nothing about what is matched at scan time.
+
+# --- Parent-brand / boundary description in the harness + smoke-plan docs ---
+# This repo's entire reason for existing is "exercise the OSS half of the
+# donmai <-> closed-platform boundary" (see AGENTS.md, README.md). Describing
+# that boundary necessarily names the parent product on the other side of it.
+# Pinned to the four exact lines that do so, not a blanket file exemption.
+BRAND_NAME :: ^README\.md:5$ :: Rens[e]i
+BRAND_NAME :: ^README\.md:11$ :: Rens[e]i
+BRAND_NAME :: ^README\.md:78$ :: Rens[e]i
+BRAND_NAME :: ^harness/doc\.go:6$ :: Rens[e]i
+
+# --- "This repo does NOT call the closed CLI namespace" boundary guardrails -
+# AGENTS.md and README.md state the platform-free contract; the four test
+# files restate it as an in-file comment banner. All of these NAME the closed
+# route prefix in order to forbid it, exactly the case
+# donmai-architecture/.guard-allowlist carves out for its own AGENTS.md.
+CLOSED_CLI_ENDPOINT :: ^AGENTS\.md:88$ :: /api/cl[i]/
+CLOSED_CLI_ENDPOINT :: ^README\.md:9$ :: /api/cl[i]/
+CLOSED_CLI_ENDPOINT :: ^step11_hardfail_ux_test\.go:27$ :: /api/cl[i]/
+CLOSED_CLI_ENDPOINT :: ^step16_arch_assess_native_test\.go:29$ :: /api/cl[i]/
+CLOSED_CLI_ENDPOINT :: ^step17_sibling_context_repos_test\.go:40$ :: /api/cl[i]/
+
+# --- "This repo does NOT read the closed test-token env var" guardrail ------
+# Same shape: AGENTS.md names the var to forbid its use, not to use it.
+CLOSED_ENV_VAR :: ^AGENTS\.md:91$ :: RENS[E]I_TEST_TOKEN
+
+# --- In-package boundary self-guard's own fragment-assembled token table ----
+# interactive/boundary_test.go is itself a leak guard (TestPlatformFreeBoundary,
+# scoped to the interactive/ package), predating this repo-wide one — see its
+# own header comment. Its token table assembles each banned string from
+# fragments so the file declaring the guard doesn't trip it, except the
+# Linear-host entry, which only splits off the "api." prefix and leaves
+# "l[i]near.app/graphql" whole in one string literal. That is test data for a
+# complementary guard, not a leak: pinned to the exact line.
+TRACKER_URL :: ^interactive/boundary_test\.go:26$ :: l[i]near\.app/graphql

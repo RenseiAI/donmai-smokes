@@ -38,13 +38,13 @@ package smokes
 //
 // To unblock the live-binary signed-verified path, Wave 13+ needs one
 // of:
-//   - REN-1344's productionized signing CI emitting bundles signed
-//     against the public Sigstore good instance (which the embedded
-//     trust root validates), OR
+//   - a productionized signing CI emitting bundles signed against the
+//     public Sigstore good instance (which the embedded trust root
+//     validates), OR
 //   - daemon-side support for an alternative trust root (e.g.,
-//     daemon.yaml: `trust.rootPath: <path>` or RENSEI_TRUST_ROOT env
-//     var) so a hermetic VirtualSigstore root can be injected at
-//     spawn time.
+//     daemon.yaml: `trust.rootPath: <path>` or a trust-root env var)
+//     so a hermetic VirtualSigstore root can be injected at spawn
+//     time.
 //
 // Both fall outside the Wave 12 sealed scope (Phase 3 + Phase 4 daemon
 // surface) and outside the donmai-smokes write-target boundary

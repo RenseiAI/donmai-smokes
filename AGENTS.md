@@ -96,9 +96,14 @@ deliberately NAMES the banned token):
 - A smoke that reaches into one of these corners only to cross-check something
   the OSS layer can detect another way -> refactor to the OSS detection.
 
-No automated leak guard exists in this repo (unlike `../donmai`'s `make
-guard`) — this section is the guard. Re-read it before any push that adds a
-smoke, an env-var read, or an outbound URL.
+`scripts/guard-b-lint.sh` (vendored from `donmai-architecture`; see its header)
+now runs this boundary as an automated check — self-test + `--all` in CI on
+every push and PR, `--commits`/`--stdin` scoped to what a PR actually adds.
+This section remains the guard for a contributor reading before they push: the
+checked-in `.guard-allowlist` narrows the automated guard to the specific
+lines that legitimately name a banned token (to forbid it, not to use it) —
+re-read both before any push that adds a smoke, an env-var read, or an
+outbound URL.
 
 ## Gotchas
 
