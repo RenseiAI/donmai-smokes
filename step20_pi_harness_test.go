@@ -382,6 +382,17 @@ func TestPiHarnessSmoke_RealBinary_HandshakeCompletes(t *testing.T) {
 		t.Fatalf("unexpected version-pin rejection of the real pinned binary; stderr:\n%s", stderr)
 	}
 
+	// Diagnose a PRE-SPAWN denial before the protocol asserts below. donmai's
+	// tool/lifecycle adaptation compiler can reject the compiled Spec before pi
+	// is ever executed; that surfaces as failureMode "spawn-failed" and would
+	// otherwise be reported by the checks below as a pi handshake/protocol
+	// regression, which is the wrong subsystem entirely. Additive: the asserts
+	// that follow are unchanged.
+	if detail := afh.ExplainAdaptationDenial(stdout + stderr); detail != "" {
+		t.Fatalf("the pi session was denied before spawn, so the real-binary handshake was never reached.\n\n%s\n"+
+			"--- stdout ---\n%s\n--- stderr ---\n%s", detail, stdout, stderr)
+	}
+
 	var res struct {
 		Status      string `json:"status"`
 		Error       string `json:"error"`
