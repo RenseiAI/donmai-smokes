@@ -1,0 +1,93 @@
+name: Closed-source content guard
+
+# Runs guard-b-lint.sh (vendored from RenseiAI/donmai-architecture; see the
+# provenance header in scripts/guard-b-lint.sh) to catch content that must
+# never ship in this public repo: the closed product brand, internal tracker
+# issue IDs (prose, branch/worktree slugs, title case, and tracker deep
+# links), closed control-plane CLI endpoints, private-repo references,
+# internal domains, internal monorepo paths, developer absolute paths,
+# closed-source environment variable names, and production measurements of
+# the closed control plane.
+#
+# This is repo-wide and complements, not replaces, interactive/boundary_test.go's
+# TestPlatformFreeBoundary — that test is scoped to the interactive/ package
+# and checks a different, narrower token set (SaaS-control-plane field/scope
+# names guard-b's rules don't cover, e.g. `active_auth`, `worker:register`).
+#
+# Six checks, all blocking:
+#   1. self-test   — proves each rule and engine path still fires.
+#   2. vendor drift — this repo's copy of guard-b-lint.sh /
+#                    guard-b-lint-selftest.sh still matches the pinned
+#                    donmai-architecture commit.
+#   3. files        — every tracked file in the working tree (`.guard-allowlist`
+#                    narrows this to the specific lines that legitimately
+#                    name a banned token in order to forbid it).
+#   4. commits      — the commit messages this PR adds, merge commits
+#                    included.
+#   5. squash msg    — the message GitHub composes from the PR title + body
+#                    when squash-merged.
+#   6. push range    — commit messages just pushed to main, as a backstop
+#                    for anything that bypassed a pull request.
+#
+# No `paths:` filter: a leak in a .txt, .json, or .go file is still a leak,
+# and a filtered trigger reports "green" by not running.
+
+on:
+  pull_request:
+    # `edited` matters: the PR title and body ARE the squash-merge message, so
+    # a body edit after the last push can introduce a leak no commit contains.
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  guard-b:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Self-test — prove every rule and engine path still fires
+        run: bash scripts/guard-b-lint-selftest.sh
+
+      - name: Vendor drift — vendored guard-b matches its pinned upstream commit
+        run: bash scripts/check-guard-b-vendor-drift.sh
+
+      - name: Run guard-b-lint (all tracked files)
+        run: bash scripts/guard-b-lint.sh --all
+
+      - name: Run guard-b-lint (commit messages added by this PR, merges included)
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags origin "${{ github.base_ref }}"
+          bash scripts/guard-b-lint.sh --commits "origin/${{ github.base_ref }}..HEAD"
+
+      - name: Run guard-b-lint (the squash-merge message GitHub will compose)
+        if: github.event_name == 'pull_request'
+        env:
+          # Via env, never inlined into the script body: a PR title or body is
+          # attacker-controlled text and must not be interpolated into bash.
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          printf '%s\n\n%s\n' "$PR_TITLE" "$PR_BODY" \
+            | bash scripts/guard-b-lint.sh --stdin pr-squash-message
+
+      - name: Run guard-b-lint (commit messages just pushed to main)
+        if: github.event_name == 'push'
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [ -z "$BEFORE" ] \
+            || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] \
+            || ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            RANGE="HEAD~1..HEAD"
+          else
+            RANGE="${BEFORE}..HEAD"
+          fi
+          echo "scanning commit messages in $RANGE"
+          bash scripts/guard-b-lint.sh --commits "$RANGE"

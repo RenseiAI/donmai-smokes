@@ -161,7 +161,7 @@ jobs:
           set -o pipefail
           GOWORK=off go test -race -v ./... -timeout 18m 2>&1 | tee "${RUNNER_TEMP}/gotest.log"
 
-      # Skip-count visibility (REN-1753 0.4a). `go test` exits 0 whether a
+      # Skip-count visibility. `go test` exits 0 whether a
       # test PASSED or SKIPPED, so coverage can silently drain away one skip
       # knob at a time — this repo has five of them (DONMAI_SMOKES_SKIP_*) and
       # every live smoke is contractually required to skip cleanly. Publish the
