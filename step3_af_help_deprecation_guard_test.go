@@ -19,6 +19,7 @@ package smokes
 import (
 	"context"
 	"os"
+	"os/exec"
 	"reflect"
 	"sort"
 	"strings"
@@ -27,6 +28,10 @@ import (
 
 	afh "github.com/RenseiAI/donmai-smokes/harness"
 )
+
+// Nouns retired from the advertised surface by ADR-2026-08-03 D5 that MUST keep
+// resolving, with a deprecation notice, until their declared removal version.
+var retiredButResolvable = []string{"worker", "fleet"}
 
 // TestAfHelpDeprecationGuard builds the donmai binary, captures its top-
 // level `--help` output and the per-surface `--help` output for each
@@ -79,10 +84,17 @@ func TestAfHelpDeprecationGuard(t *testing.T) {
 		}
 
 		// Every supported public command MUST be present.
+		//
+		// `worker` and `fleet` were REMOVED from this list when they were marked
+		// Deprecated: cobra omits a deprecated command from Available Commands,
+		// so advertising them here would pin the opposite of the shipped
+		// decision. They must still RESOLVE and warn until their declared
+		// removal version — that half is asserted in `retired-but-resolvable`
+		// below, so nothing about the compatibility window went uncovered.
 		currentSurface := []string{
 			"admin", "agent", "arch", "code", "completion", "creds",
-			"dashboard", "fleet", "governor", "help", "linear", "logs",
-			"mcp", "orchestrator", "project", "session", "status", "worker",
+			"dashboard", "governor", "help", "linear", "logs",
+			"mcp", "orchestrator", "project", "session", "status",
 			"host", "github",
 		}
 		// Wave 9 migrated surface: provider, kit, workarea, routing.
@@ -94,6 +106,39 @@ func TestAfHelpDeprecationGuard(t *testing.T) {
 			if _, ok := got[name]; !ok {
 				t.Errorf("donmai --help missing required top-level subcommand %q\n--- output ---\n%s",
 					name, out)
+			}
+		}
+
+		// The other half of the deprecation contract: a retired noun must be
+		// GONE from the advertised surface. Asserting only "still resolves"
+		// would pass just as happily if the deprecation had never shipped.
+		for _, name := range retiredButResolvable {
+			if _, ok := got[name]; ok {
+				t.Errorf("donmai --help still advertises deprecated subcommand %q — "+
+					"cobra hides a deprecated command, so its presence means the marker was lost"+
+					"\n--- output ---\n%s", name, out)
+			}
+		}
+	})
+
+	// A deprecated noun keeps WORKING until its declared removal version. The
+	// help listing cannot show this — cobra hides it — so resolution is proven
+	// by invoking it. Without this, dropping the two names from
+	// `currentSurface` above would have silently retired the compatibility
+	// window a release early.
+	t.Run("retired-but-resolvable", func(t *testing.T) {
+		for _, name := range retiredButResolvable {
+			runCtx, runCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			out, err := exec.CommandContext(runCtx, donmaiBinary, name, "--help").CombinedOutput()
+			runCancel()
+			if err != nil {
+				t.Errorf("donmai %s --help: deprecation must not remove the command before its "+
+					"declared removal version: %v\n%s", name, err, out)
+				continue
+			}
+			if !strings.Contains(string(out), "deprecated") {
+				t.Errorf("donmai %s --help resolves but prints no deprecation notice — a retired "+
+					"noun that works silently gives an operator no reason to migrate\n%s", name, out)
 			}
 		}
 	})
