@@ -75,6 +75,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	afh "github.com/RenseiAI/donmai-smokes/harness"
 )
 
 // ── Wire-shape types (mirroring the fixed mcpServersConfig output) ────────────
@@ -357,12 +359,8 @@ func TestCodexMCPConfig_Mixed(t *testing.T) {
 //     "codex" on PATH — checked in that precedence order)
 func codexBinaryGate(t *testing.T) string {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("live codex binary test; skipped under -short")
-	}
-	if os.Getenv("DONMAI_SMOKES_SKIP_LIVE_API") == "1" {
-		t.Skip("DONMAI_SMOKES_SKIP_LIVE_API=1 — operator opted out of live API smokes")
-	}
+	afh.SkipIfShort(t, "live codex binary test")
+	afh.SkipIfKnob(t, "DONMAI_SMOKES_SKIP_LIVE_API", "operator opted out of live API smokes")
 
 	// Check explicit env overrides first (useful for test harnesses that
 	// install codex to a non-PATH location).
@@ -371,9 +369,16 @@ func codexBinaryGate(t *testing.T) string {
 			if _, err := os.Stat(p); err == nil {
 				return p
 			}
-			// Env set but path doesn't exist → skip rather than fail, since
-			// the operator may have set a stale path for a different machine.
-			t.Skipf("$%s=%q is set but the binary does not exist — skipping live codex gate", env, p)
+			// Env set but the path does not exist. This used to skip, on the
+			// theory that the operator might have left a stale path from
+			// another machine. That reasoning inverts who is responsible:
+			// setting the variable IS the request to run this gate, so a
+			// broken value is a broken request, not a precondition. Skipping
+			// it means an operator who typos the path gets `ok` and believes
+			// the live codex gate ran. Fail instead — the fix (unset it, or
+			// correct it) is one line and now discoverable.
+			t.Fatalf("$%s=%q is set but no such file exists — unset it to fall back to PATH, "+
+				"or correct it to the codex binary you meant to gate against", env, p)
 		}
 	}
 

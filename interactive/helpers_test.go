@@ -59,16 +59,22 @@ func donmaiModuleDir(t *testing.T) string {
 	// donmai to the main checkout that lacks viewertest); the replace in go.mod
 	// is what points at the worktree that has it.
 	cmd.Env = append(os.Environ(), "GOWORK=off")
+	// These three used to skip. They cannot legitimately: this file IMPORTS
+	// donmai packages, so the test binary only exists because the module
+	// already resolved and compiled. A `go list -m` that then fails, or
+	// returns a path that is not on disk, is a broken toolchain or a
+	// corrupted module cache — an error. Skipping it reported `ok` for a
+	// suite that never read a single fixture.
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Skipf("skipping: cannot resolve donmai module dir: %v\n%s", err, out)
+		t.Fatalf("resolve donmai module dir (the module compiled, so this should not fail): %v\n%s", err, out)
 	}
 	dir := strings.TrimSpace(string(out))
 	if dir == "" {
-		t.Skip("skipping: donmai module dir resolved empty")
+		t.Fatal("donmai module dir resolved empty (the module compiled, so this should not happen)")
 	}
 	if _, err := os.Stat(dir); err != nil {
-		t.Skipf("skipping: donmai module dir %q not present: %v", dir, err)
+		t.Fatalf("donmai module dir %q is not on disk — corrupted module cache?: %v", dir, err)
 	}
 	return dir
 }
@@ -85,12 +91,23 @@ func buildFixture(t *testing.T) string {
 	if err != nil {
 		t.Skipf("skipping: Go toolchain not found on PATH: %v", err)
 	}
+	// Locate the package before building it, so the two cases stop looking
+	// alike. "the pinned donmai has no viewertest harness" is a precondition;
+	// "the viewertest harness is there and does not compile" is a failure.
+	// One t.Skipf used to cover both, and its message ("viewertest harness
+	// unavailable?" — with the question mark) records that even its author
+	// could not tell which had happened.
+	const fixturePkg = "github.com/RenseiAI/donmai/attachclient/viewertest/fixturetui"
+	pkgDir := filepath.Join(donmaiModuleDir(t), "attachclient", "viewertest", "fixturetui")
+	if _, err := os.Stat(pkgDir); err != nil {
+		t.Skipf("pinned donmai has no viewertest fixture package at %s — nothing to drive", pkgDir)
+	}
+
 	bin := filepath.Join(t.TempDir(), "vtfixture")
-	cmd := exec.Command(goBin, "build", "-o", bin, //nolint:gosec // G204: fixed in-repo package path built with the toolchain — no untrusted input
-		"github.com/RenseiAI/donmai/attachclient/viewertest/fixturetui")
+	cmd := exec.Command(goBin, "build", "-o", bin, fixturePkg) //nolint:gosec // G204: fixed in-repo package path built with the toolchain — no untrusted input
 	cmd.Env = append(os.Environ(), "GOWORK=off")
 	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Skipf("skipping: cannot build vtfixture (viewertest harness unavailable?): %v\n%s", err, out)
+		t.Fatalf("build vtfixture from %s: %v\n%s", pkgDir, err, out)
 	}
 	return bin
 }
@@ -217,13 +234,17 @@ func (m fixtureMeta) offset(label string) (int, bool) {
 func loadRecordedFixture(t *testing.T, moduleDir, name string) ([]byte, fixtureMeta) {
 	t.Helper()
 	base := filepath.Join(moduleDir, "ptyhost", "testdata")
+	// Fatal, not skip: these fixtures ship INSIDE the pinned donmai module,
+	// so their absence means the pin moved out from under this suite. That
+	// is exactly the regression these tests exist to catch, and skipping it
+	// turned the catch into a silent `ok`.
 	raw, err := os.ReadFile(filepath.Join(base, name+".raw"))
 	if err != nil {
-		t.Skipf("skipping: recorded fixture %s.raw unavailable: %v", name, err)
+		t.Fatalf("recorded fixture %s.raw missing from the pinned donmai module at %s: %v", name, base, err)
 	}
 	metaBytes, err := os.ReadFile(filepath.Join(base, name+".json"))
 	if err != nil {
-		t.Skipf("skipping: recorded fixture %s.json unavailable: %v", name, err)
+		t.Fatalf("recorded fixture %s.json missing from the pinned donmai module at %s: %v", name, base, err)
 	}
 	var m fixtureMeta
 	if err := json.Unmarshal(metaBytes, &m); err != nil {
@@ -260,9 +281,12 @@ func parseGoFuzzCorpus(data []byte) (payload []byte, ok bool) {
 // skips the caller.
 func readCorpusDir(t *testing.T, dir string) map[string][]byte {
 	t.Helper()
+	// Fatal, not skip: like the recorded fixtures, the corpus ships inside
+	// the pinned donmai module. An unreadable corpus dir means the pin moved,
+	// not that this machine is unsuitable.
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		t.Skipf("skipping: corpus dir %q unavailable: %v", dir, err)
+		t.Fatalf("fuzz corpus dir %q missing from the pinned donmai module: %v", dir, err)
 	}
 	out := make(map[string][]byte)
 	for _, e := range entries {
@@ -278,7 +302,7 @@ func readCorpusDir(t *testing.T, dir string) map[string][]byte {
 		}
 	}
 	if len(out) == 0 {
-		t.Skipf("skipping: no []byte corpus entries under %q", dir)
+		t.Fatalf("fuzz corpus dir %q holds no []byte entries — nothing to replay, so a green run here would mean nothing", dir)
 	}
 	return out
 }

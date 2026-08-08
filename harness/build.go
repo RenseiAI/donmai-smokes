@@ -43,19 +43,13 @@ type BuildOptions struct {
 	Timeout time.Duration
 }
 
-// BuildDonmaiBinary is a convenience wrapper around BuildBinary that fills
-// in the donmai-binary defaults (SourceDir="../donmai",
-// EntryPoint="./cmd/donmai") so donmai-side smoke tests can build the
-// binary in one line. The OutputPath is required; pass
-// filepath.Join(t.TempDir(), "donmai") or similar. Other BuildOptions
-// fields (Env, LogSink, Timeout) override the defaults when set;
-// SourceDir / EntryPoint cannot be overridden via this wrapper — call
-// BuildBinary directly for non-default builds.
-func BuildDonmaiBinary(ctx context.Context, opts BuildOptions) (string, error) {
-	opts.SourceDir = "../donmai"
-	opts.EntryPoint = "./cmd/donmai"
-	return BuildBinary(ctx, opts)
-}
+// There is deliberately no BuildDonmaiBinary convenience wrapper here any
+// more. It defaulted SourceDir to the literal relative path "../donmai",
+// which is correct from a primary checkout and wrong from a linked worktree —
+// and its callers turned the resulting "does not exist" error into a t.Skip,
+// so the entire live suite reported `ok` in 1.2s having built nothing. Use
+// RequireDonmaiBinary (live_gate.go): it locates the checkout by identity
+// rather than by relative path, and fails loudly when it cannot.
 
 // BuildBinary compiles a Go binary via `go build -o <OutputPath> <EntryPoint>`
 // from BuildOptions.SourceDir and returns the absolute path of the produced

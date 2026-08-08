@@ -58,7 +58,9 @@ DONMAI_SMOKES_SKIP_LIVE_API=1 go test ./...         # opt out of live external-A
 make lint                                           # golangci-lint run ./...
 ```
 
-The first build of `donmai` takes 60-90s on a cold cache; warm runs are sub-second. All tests `t.Skip` cleanly when the donmai sibling worktree or Go toolchain isn't available, so the harness can run standalone for CI flag-parsing checks.
+The first build of `donmai` takes 60-90s on a cold cache; warm runs are sub-second — which is also the shape of the tell that this suite once shipped without: `ok … 1.2s` cannot be a run that built `donmai`.
+
+The sibling checkout is located by walking up from the working directory and identifying candidates by their go.mod module path, so a primary checkout, a linked worktree and CI's two-repo layout all work; `DONMAI_SMOKES_DONMAI_DIR` overrides it. **A missing or unbuildable checkout fails the run, it does not skip it** — a smoke that cannot find the binary it exists to drive has proven nothing, and `ok` would say otherwise. To run the harness standalone anyway, opt out explicitly with `-short` or `DONMAI_SMOKES_SKIP_LIVE_DAEMON=1`; every run prints a `live-smoke liveness:` tally saying how many live smokes actually exercised the binary.
 
 ## Conventions
 

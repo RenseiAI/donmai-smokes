@@ -27,9 +27,10 @@ package smokes
 // Platform-free: no WorkOS, no Linear, no /api/cli/*, no rsk_* tokens.
 // Only the donmai binary itself is invoked — no daemon process is started.
 //
-// Skip-mode: honours -short (build skip) and DONMAI_SMOKES_SKIP_INSTALLER=1
-// for the doctor sub-test (which uses the hermetic HOME / installer path).
-// The status/stats sub-tests only need the binary; they honour -short.
+// Skip-mode: honours -short and DONMAI_SMOKES_SKIP_LIVE_DAEMON=1 (build
+// skip, all three sub-tests), plus DONMAI_SMOKES_SKIP_INSTALLER=1 for the
+// doctor sub-test specifically (which uses the hermetic HOME / installer
+// path).
 //
 // Timing: warm cache ~1s (three subprocess calls; binary build dominates
 // on cold cache: 60-90s).
@@ -38,7 +39,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -54,38 +54,31 @@ import (
 // the donmai CLI and asserts the error output guides the user with the
 // correct binary name and actionable next step.
 func TestDaemonHardFailRemediation(t *testing.T) {
-	if testing.Short() {
-		t.Skip("binary build required; skipped under -short")
-	}
+	afh.SkipIfShort(t, "binary build required")
+	afh.SkipIfKnob(t, afh.SkipLiveDaemonEnv, "operator opted out of live-process smokes")
 
-	// Build the donmai binary from the sibling checkout. Cold cache 60-90s;
-	// warm sub-second. 3-minute parent context matches the other step files.
-	buildCtx, buildCancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer buildCancel()
-
+	// Build the donmai binary from the located checkout. Cold cache 60-90s;
+	// warm sub-second.
 	binDir := t.TempDir()
-	donmaiBinary, err := afh.BuildDonmaiBinary(buildCtx, afh.BuildOptions{
+	donmaiBinary, _ := afh.RequireDonmaiBinary(t, afh.LiveBinaryOptions{
 		OutputPath: filepath.Join(binDir, "donmai"),
 		Env:        append(os.Environ(), "GOWORK="),
 	})
-	if err != nil {
-		if strings.Contains(err.Error(), "resolve ../") ||
-			strings.Contains(err.Error(), "no such file") ||
-			strings.Contains(err.Error(), "executable file not found") {
-			t.Skipf("donmai binary unavailable: %v", err)
-		}
-		t.Fatalf("build donmai binary: %v", err)
-	}
 
-	// pickUnreachablePort returns a port number that is guaranteed to have
-	// nothing listening (it was free when we checked, and we're not binding
-	// it). Used so daemon status/stats get a clean "connection refused"
-	// rather than a spurious timeout from a stale local process.
+	// pickUnreachablePort returns a port with nothing listening on it,
+	// confirmed by a dial. Used so daemon status/stats get a clean
+	// "connection refused" rather than a spurious timeout from a stale local
+	// process.
+	//
+	// PickClosedPort retries the allocate-then-probe race internally. The
+	// subtests below used to run that probe themselves and t.Skipf when the
+	// port had been taken — dropping the hard-fail assertion on a coin flip,
+	// silently, in the one smoke whose job is to prove the hard-fail UX.
 	pickUnreachablePort := func(t *testing.T) int {
 		t.Helper()
-		p, err := afh.PickFreePort()
+		p, err := afh.PickClosedPort(8)
 		if err != nil {
-			t.Fatalf("pick free port: %v", err)
+			t.Fatalf("pick a closed loopback port: %v", err)
 		}
 		return p
 	}
@@ -147,15 +140,6 @@ func TestDaemonHardFailRemediation(t *testing.T) {
 	//   "daemon is not running — start it with `donmai daemon install` then `donmai daemon start`"
 	t.Run("daemon_status_down", func(t *testing.T) {
 		port := pickUnreachablePort(t)
-		// Belt-and-suspenders: make sure nothing is listening on this port
-		// by attempting a connection ourselves. If something answers,
-		// skip cleanly.
-		conn, connErr := net.DialTimeout("tcp",
-			fmt.Sprintf("127.0.0.1:%d", port), 200*time.Millisecond)
-		if connErr == nil {
-			_ = conn.Close()
-			t.Skipf("port %d is not free (something is listening); cannot test connection-refused path", port)
-		}
 
 		home := t.TempDir()
 		out, runErr := runCapture(t, home, "daemon", "status",
@@ -196,12 +180,6 @@ func TestDaemonHardFailRemediation(t *testing.T) {
 	// daemonDownErr code path as daemon status (afcli/daemon.go:756).
 	t.Run("daemon_stats_down", func(t *testing.T) {
 		port := pickUnreachablePort(t)
-		conn, connErr := net.DialTimeout("tcp",
-			fmt.Sprintf("127.0.0.1:%d", port), 200*time.Millisecond)
-		if connErr == nil {
-			_ = conn.Close()
-			t.Skipf("port %d is not free; cannot test connection-refused path", port)
-		}
 
 		home := t.TempDir()
 		out, runErr := runCapture(t, home, "daemon", "stats",
@@ -245,9 +223,7 @@ func TestDaemonHardFailRemediation(t *testing.T) {
 	// DONMAI_SMOKES_SKIP_INSTALLER=1 for hermetic CI environments that
 	// can't tolerate the plist/unit path check.
 	t.Run("daemon_doctor_not_installed", func(t *testing.T) {
-		if os.Getenv("DONMAI_SMOKES_SKIP_INSTALLER") == "1" {
-			t.Skip("DONMAI_SMOKES_SKIP_INSTALLER=1 — operator opted out")
-		}
+		afh.SkipIfKnob(t, "DONMAI_SMOKES_SKIP_INSTALLER", "operator opted out")
 		if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 			t.Skipf("daemon doctor smoke only runs on darwin/linux; got %s", runtime.GOOS)
 		}

@@ -320,22 +320,6 @@ type gatewayFixture struct {
 	upstreamKey     string
 }
 
-// gatewaySourceDir resolves the worker-local gateway checkout. The explicit
-// in-flight source override wins. Otherwise it supports both the primary
-// donmai-smokes checkout (../donmai) and a linked worktree (../../donmai), while
-// retaining the ordinary missing-sibling skip on hosted CI.
-func gatewaySourceDir() string {
-	if v := strings.TrimSpace(os.Getenv("DONMAI_ARCH_SOURCE_DIR")); v != "" {
-		return v
-	}
-	for _, candidate := range []string{"../donmai", "../../donmai"} {
-		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
-			return candidate
-		}
-	}
-	return "../donmai"
-}
-
 // setupGatewayFixture builds the donmai binary from the gateway source checkout
 // and stands up the daemon-control fixture carrying a gateway-served resolved
 // profile. Skips cleanly when the source checkout predates the worker-local
@@ -343,33 +327,24 @@ func gatewaySourceDir() string {
 func setupGatewayFixture(t *testing.T, testName string, resolvedProfile map[string]any, stageBudgetSeconds int) *gatewayFixture {
 	t.Helper()
 
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not on PATH")
-	}
+	afh.SkipIfToolMissing(t, "git", "the bare fixture repo this smoke clones is created with git")
 
-	srcDir := gatewaySourceDir()
+	// Locate first, probe second. This helper previously carried a private
+	// "../../donmai" fallback — a local patch for the linked-worktree layout
+	// that the other four steps never got. harness.LocateDonmaiSource now
+	// handles every layout in one place, so the patch is gone.
+	srcDir := afh.RequireDonmaiSourceAt(t, inFlightSourceDir())
 	producer := filepath.Join(srcDir, "afcli", "gateway_bind.go")
 	if _, err := os.Stat(producer); err != nil {
-		t.Skipf("donmai checkout at %q predates the worker-local gateway producer (afcli/gateway_bind.go) this "+
-			"lane pins against — point DONMAI_ARCH_SOURCE_DIR at a checkout that has it: %v", srcDir, err)
+		afh.DeclineLive(t, "donmai checkout at %q predates the worker-local gateway producer "+
+			"(afcli/gateway_bind.go) this lane pins against — point %s at a checkout that has it: %v",
+			srcDir, inFlightSourceDirEnv, err)
 	}
 
-	buildCtx, buildCancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer buildCancel()
-	donmaiBinary, err := afh.BuildBinary(buildCtx, afh.BuildOptions{
+	donmaiBinary, _ := afh.RequireDonmaiBinary(t, afh.LiveBinaryOptions{
 		SourceDir:  srcDir,
-		EntryPoint: "./cmd/donmai",
 		OutputPath: filepath.Join(t.TempDir(), "donmai"),
-		Env:        append(os.Environ(), "GOWORK=off"),
 	})
-	if err != nil {
-		if strings.Contains(err.Error(), "resolve ../") ||
-			strings.Contains(err.Error(), "no such file") ||
-			strings.Contains(err.Error(), "executable file not found") {
-			t.Skipf("donmai binary unavailable (source %q): %v", srcDir, err)
-		}
-		t.Fatalf("build donmai binary: %v", err)
-	}
 
 	sessionRepo := afh.MakeBareFixtureRepo(t, "gateway-lane-repo-"+testName)
 	sessionID := "smoke-gateway-" + testName
@@ -623,12 +598,8 @@ func readGatewayCostEvents(t *testing.T, path string) []gatewayCostEvent {
 //  5. A cost-ledger row landed carrying the `harness` column and host=gateway
 //     (08 §7/§10 item 5), which is what makes a gateway turn accountable.
 func TestGatewaySmoke_WorkerLocalBinding_CompletesTurn(t *testing.T) {
-	if testing.Short() {
-		t.Skip("end-to-end agent-run smoke; skipped under -short")
-	}
-	if os.Getenv("DONMAI_SMOKES_SKIP_LIVE_DAEMON") == "1" {
-		t.Skip("DONMAI_SMOKES_SKIP_LIVE_DAEMON=1 — operator opted out of live-process smokes")
-	}
+	afh.SkipIfShort(t, "end-to-end agent-run smoke")
+	afh.SkipIfKnob(t, afh.SkipLiveDaemonEnv, "operator opted out of live-process smokes")
 
 	realPi := afh.EnsurePiBinary(t)
 	piBinDir := t.TempDir()
@@ -641,7 +612,8 @@ func TestGatewaySmoke_WorkerLocalBinding_CompletesTurn(t *testing.T) {
 	f.upstreamBaseURL = upstream.baseURL()
 	f.upstreamKey = gatewayUpstreamKey
 	if f.nodeDir == "" {
-		t.Skip("node not on PATH — pi is a node script and cannot exec; skipping gateway completed-turn check")
+		afh.DeclineLive(t, "node not on PATH — pi is a node script and cannot exec, "+
+			"so the gateway completed-turn check has nothing to drive")
 	}
 
 	stdout, stderr, runErr := f.run(t, 6*time.Minute, piBinDir)
@@ -757,12 +729,8 @@ func TestGatewaySmoke_WorkerLocalBinding_CompletesTurn(t *testing.T) {
 // azure-openai-responses, no base URL) and nothing anywhere said so. The lane is
 // cheap (no turn, no model traffic) and deterministic.
 func TestGatewaySmoke_UnconfiguredWorker_FailsClosed(t *testing.T) {
-	if testing.Short() {
-		t.Skip("end-to-end agent-run smoke; skipped under -short")
-	}
-	if os.Getenv("DONMAI_SMOKES_SKIP_LIVE_DAEMON") == "1" {
-		t.Skip("DONMAI_SMOKES_SKIP_LIVE_DAEMON=1 — operator opted out of live-process smokes")
-	}
+	afh.SkipIfShort(t, "end-to-end agent-run smoke")
+	afh.SkipIfKnob(t, afh.SkipLiveDaemonEnv, "operator opted out of live-process smokes")
 
 	piBinDir := resolvePiBinDir(t)
 	model := piModel()
@@ -774,7 +742,8 @@ func TestGatewaySmoke_UnconfiguredWorker_FailsClosed(t *testing.T) {
 	f.upstreamBaseURL = upstream.baseURL()
 	f.upstreamKey = "" // the unconfigured worker
 	if f.nodeDir == "" {
-		t.Skip("node not on PATH — pi is a node script and cannot exec; skipping gateway fail-closed check")
+		afh.DeclineLive(t, "node not on PATH — pi is a node script and cannot exec, "+
+			"so the gateway fail-closed check has nothing to drive")
 	}
 
 	stdout, stderr, runErr := f.run(t, 3*time.Minute, piBinDir)

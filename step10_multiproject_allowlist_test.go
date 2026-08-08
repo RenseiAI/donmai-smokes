@@ -24,7 +24,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"slices"
 	"testing"
 	"time"
@@ -33,12 +32,8 @@ import (
 )
 
 func TestExplicitProjectAdmissionRouting(t *testing.T) {
-	if testing.Short() {
-		t.Skip("end-to-end live-daemon test; skipped under -short")
-	}
-	if os.Getenv("DONMAI_SMOKES_SKIP_LIVE_DAEMON") == "1" {
-		t.Skip("DONMAI_SMOKES_SKIP_LIVE_DAEMON=1 — operator opted out of the live-daemon smoke")
-	}
+	afh.SkipIfShort(t, "end-to-end live-daemon test")
+	afh.SkipIfKnob(t, afh.SkipLiveDaemonEnv, "operator opted out of the live-daemon smoke")
 
 	const daemonYAML = `apiVersion: donmai.dev/v1
 kind: LocalDaemon

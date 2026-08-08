@@ -177,15 +177,9 @@ kit:
 // See file-level godoc for the carryover explaining why the
 // trust=signed-verified happy-path defers to Wave 13+.
 func TestAfDaemonKitLifecycleHonestEndToEnd(t *testing.T) {
-	if testing.Short() {
-		t.Skip("end-to-end live-daemon test; skipped under -short")
-	}
-	if os.Getenv("DONMAI_SMOKES_SKIP_LIVE_DAEMON") == "1" {
-		t.Skip("DONMAI_SMOKES_SKIP_LIVE_DAEMON=1 — operator opted out of the live-daemon smoke")
-	}
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skipf("git binary unavailable on PATH: %v", err)
-	}
+	afh.SkipIfShort(t, "end-to-end live-daemon test")
+	afh.SkipIfKnob(t, afh.SkipLiveDaemonEnv, "operator opted out of the live-daemon smoke")
+	afh.SkipIfToolMissing(t, "git", "the kit fixtures this smoke installs are git repositories")
 
 	// ─── Local git fixture ─────────────────────────────────────────────
 	//

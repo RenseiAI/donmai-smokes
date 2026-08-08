@@ -103,22 +103,6 @@ exit 1
 	}
 }
 
-// openCodeSourceDir resolves the donmai checkout this smoke builds from,
-// mirroring step17's siblingSourceDir: DONMAI_ARCH_SOURCE_DIR wins (the
-// harness-wide in-flight-source override), then the feature worktree
-// while W0's binaryPins/probe-enforcement change is unmerged, falling
-// back to the canonical ../donmai sibling once it lands on main.
-func openCodeSourceDir() string {
-	if v := strings.TrimSpace(os.Getenv("DONMAI_ARCH_SOURCE_DIR")); v != "" {
-		return v
-	}
-	const featureWorktree = "../donmai.wt/oc-matrix-pins"
-	if fi, err := os.Stat(featureWorktree); err == nil && fi.IsDir() {
-		return featureWorktree
-	}
-	return "../donmai"
-}
-
 // opencodeHarnessFixture bundles the built donmai binary and a fresh
 // daemon-control httptest fixture for one opencode-harness smoke.
 // resolvedProfile is injected verbatim as the SessionDetail's
@@ -156,32 +140,21 @@ func setupOpenCodeHarnessFixture(t *testing.T, testName string, resolvedProfile 
 		budget = stageBudgetSeconds[0]
 	}
 
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not on PATH")
-	}
+	afh.SkipIfToolMissing(t, "git", "the bare fixture repo this smoke clones is created with git")
 
-	srcDir := openCodeSourceDir()
+	// Locate first, probe second: a probe on a checkout that is not there
+	// cannot distinguish "too old" from "absent", and used to report the
+	// former for the latter.
+	srcDir := afh.RequireDonmaiSourceAt(t, inFlightSourceDir())
 	if _, err := os.Stat(filepath.Join(srcDir, "provider", "harness", "opencode", "probe.go")); err != nil {
-		t.Skipf("donmai checkout at %q predates provider/harness/opencode/probe.go — "+
-			"point DONMAI_ARCH_SOURCE_DIR at the feature worktree to exercise this smoke", srcDir)
+		afh.DeclineLive(t, "donmai checkout at %q predates provider/harness/opencode/probe.go — "+
+			"point %s at a checkout that has it", srcDir, inFlightSourceDirEnv)
 	}
 
-	buildCtx, buildCancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer buildCancel()
-	donmaiBinary, err := afh.BuildBinary(buildCtx, afh.BuildOptions{
+	donmaiBinary, _ := afh.RequireDonmaiBinary(t, afh.LiveBinaryOptions{
 		SourceDir:  srcDir,
-		EntryPoint: "./cmd/donmai",
 		OutputPath: filepath.Join(t.TempDir(), "donmai"),
-		Env:        append(os.Environ(), "GOWORK=off"),
 	})
-	if err != nil {
-		if strings.Contains(err.Error(), "resolve ../") ||
-			strings.Contains(err.Error(), "no such file") ||
-			strings.Contains(err.Error(), "executable file not found") {
-			t.Skipf("donmai binary unavailable (source %q): %v", srcDir, err)
-		}
-		t.Fatalf("build donmai binary: %v", err)
-	}
 
 	sessionRepo := afh.MakeBareFixtureRepo(t, "opencode-harness-repo-"+testName)
 	sessionID := "smoke-opencode-harness-" + testName
@@ -277,12 +250,8 @@ func (f *opencodeHarnessFixture) run(t *testing.T, ctx context.Context, extraPat
 // binary needed for this one (that is exactly the point: donmai must
 // reject it before ever trying to spawn it).
 func TestOpenCodeHarnessSmoke_VersionPinGuard(t *testing.T) {
-	if testing.Short() {
-		t.Skip("end-to-end agent-run smoke; skipped under -short")
-	}
-	if os.Getenv("DONMAI_SMOKES_SKIP_LIVE_DAEMON") == "1" {
-		t.Skip("DONMAI_SMOKES_SKIP_LIVE_DAEMON=1 — operator opted out of live-process smokes")
-	}
+	afh.SkipIfShort(t, "end-to-end agent-run smoke")
+	afh.SkipIfKnob(t, afh.SkipLiveDaemonEnv, "operator opted out of live-process smokes")
 
 	f := setupOpenCodeHarnessFixture(t, "pinguard", map[string]any{
 		"provider": "opencode",
@@ -324,12 +293,8 @@ func bogusModelResolvedProfile() map[string]any {
 // Result on stdout (07 §8 items 1-2, adapted for the deterministic,
 // network-free error path — see the package doc).
 func TestOpenCodeHarnessSmoke_RealBinary_SpawnEventStreamTerminal(t *testing.T) {
-	if testing.Short() {
-		t.Skip("end-to-end agent-run smoke; skipped under -short")
-	}
-	if os.Getenv("DONMAI_SMOKES_SKIP_LIVE_DAEMON") == "1" {
-		t.Skip("DONMAI_SMOKES_SKIP_LIVE_DAEMON=1 — operator opted out of live-process smokes")
-	}
+	afh.SkipIfShort(t, "end-to-end agent-run smoke")
+	afh.SkipIfKnob(t, afh.SkipLiveDaemonEnv, "operator opted out of live-process smokes")
 
 	opencodeBin := afh.EnsureOpenCodeBinary(t)
 	opencodeBinDir := filepath.Dir(opencodeBin)
@@ -383,12 +348,8 @@ func TestOpenCodeHarnessSmoke_RealBinary_SpawnEventStreamTerminal(t *testing.T) 
 // processes; port released" — Lane-A has no port, so the orphan-process
 // half is what's assertable here).
 func TestOpenCodeHarnessSmoke_RealBinary_Teardown(t *testing.T) {
-	if testing.Short() {
-		t.Skip("end-to-end agent-run smoke; skipped under -short")
-	}
-	if os.Getenv("DONMAI_SMOKES_SKIP_LIVE_DAEMON") == "1" {
-		t.Skip("DONMAI_SMOKES_SKIP_LIVE_DAEMON=1 — operator opted out of live-process smokes")
-	}
+	afh.SkipIfShort(t, "end-to-end agent-run smoke")
+	afh.SkipIfKnob(t, afh.SkipLiveDaemonEnv, "operator opted out of live-process smokes")
 
 	opencodeBin := afh.EnsureOpenCodeBinary(t)
 	opencodeBinDir := filepath.Dir(opencodeBin)

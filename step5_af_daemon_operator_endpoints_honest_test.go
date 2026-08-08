@@ -58,12 +58,8 @@ import (
 // through S4 (kit scan-paths), S5 (workarea live-pool view), and S6a
 // (routing decision recording) end-to-end.
 func TestAfDaemonOperatorEndpointsHonestEndToEnd(t *testing.T) {
-	if testing.Short() {
-		t.Skip("end-to-end live-daemon test; skipped under -short")
-	}
-	if os.Getenv("DONMAI_SMOKES_SKIP_LIVE_DAEMON") == "1" {
-		t.Skip("DONMAI_SMOKES_SKIP_LIVE_DAEMON=1 — operator opted out of the live-daemon smoke")
-	}
+	afh.SkipIfShort(t, "end-to-end live-daemon test")
+	afh.SkipIfKnob(t, afh.SkipLiveDaemonEnv, "operator opted out of the live-daemon smoke")
 
 	// S4 setup — write a minimal-valid .kit.toml under a dedicated kit
 	// scan dir. The TOML schema mirrors 005-kit-manifest-spec.md; the

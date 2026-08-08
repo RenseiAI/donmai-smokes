@@ -1,7 +1,7 @@
 # donmai-smokes — OSS-canonical smoke harness for the donmai binary (OSS-public)
 
 Go, module `github.com/RenseiAI/donmai-smokes`. Builds the `donmai` binary from
-the sibling `../donmai` checkout, spawns a foreground daemon with an isolated
+the sibling `donmai` checkout, spawns a foreground daemon with an isolated
 HOME on a free port, and drives the daemon lifecycle plus the four
 daemon-targeted command surfaces (`provider`, `kit`, `workarea`, `routing`)
 against the live localhost-only `/api/daemon/*` HTTP control API (default port
@@ -10,8 +10,15 @@ this harness against its own daemon with zero tenant assumptions baked in.
 
 ## Operating context
 
-- System under test: `../donmai`. Missing? `gh repo clone RenseiAI/donmai
-  ../donmai` (from a worktree, siblings sit at `../../<repo>`).
+- System under test: the sibling `donmai` checkout. `harness.LocateDonmaiSource`
+  finds it by walking up from the working directory and IDENTIFYING each
+  candidate (go.mod module path + `cmd/donmai`), so a primary checkout
+  (`<root>/donmai-smokes`), a linked worktree (`<root>/donmai-smokes.wt/<name>`)
+  and hosted CI's two-repo layout all resolve without special cases. Missing?
+  `gh repo clone RenseiAI/donmai <parent-of-this-repo>/donmai`, or point
+  `DONMAI_SMOKES_DONMAI_DIR` at one. **Never** hard-code `../donmai`: it is
+  wrong from a worktree, and that is precisely how this suite once reported
+  `ok` in 1.2s having built nothing (see §Liveness).
 - Governing corpus: `../donmai-architecture/` — the corpus wins over code;
   align the code or open an ADR. Shared playbook:
   `../donmai-architecture/agents/PROTOCOL.md`.
@@ -52,7 +59,10 @@ each result line in your report.
 
 ## Harness map — read before writing a new smoke
 
-- `harness/build.go` — `BuildDonmaiBinary`/`BuildBinary`: `go build` from `../donmai`.
+- `harness/sut.go` — `LocateDonmaiSource`: finds the donmai checkout by identity, from any layout; returns a `*SUTNotFoundError` naming every path it tried.
+- `harness/live_gate.go` — the gate EVERY live smoke passes through: `SkipIfShort` / `SkipIfKnob` / `SkipIfToolMissing` / `DeclineLive` / `RequireDonmaiSource(At)` / `RequireDonmaiBinary`.
+- `harness/liveness.go` — the ledger + `CheckLiveness`; `liveness_test.go`'s `TestMain` reds a run that proved nothing.
+- `harness/build.go` — `BuildBinary`: `go build` from an explicit SourceDir. Prefer `RequireDonmaiBinary`.
 - `harness/live_daemon.go` — `LiveDaemonWithConfig`: spawn + healthz-wait, optional daemon.yaml pre-write.
 - `harness/daemon_detect.go` — `DaemonAvailable`: probe daemon reachability.
 - `harness/runner.go` — `Runner`: subprocess executor (dry-run, verbose, timeout, binary override).
@@ -66,10 +76,12 @@ each result line in your report.
 - Tests: stdlib `testing`, table-driven, no testify; `httptest` for HTTP fixtures (divergence breaks `../donmai` parity).
 - Errors: `fmt.Errorf("context: %w", err)`; step context via `harness.WrapStep`. Never `panic`, never `log.Fatal` (kills the whole suite).
 - GOWORK is two-sided: tests run `GOWORK=off`; the subprocess building donmai gets `GOWORK=` (cleared) so `../donmai`'s own `go.mod` resolves — never "fix" either (workspace overlay corrupts both resolutions).
-- Every smoke `t.Skip`s cleanly when `../donmai` or the Go toolchain is absent (local checkouts without a sibling; hosted CI now checks one out).
-- New live-daemon smokes honor `-short` AND `DONMAI_SMOKES_SKIP_LIVE_DAEMON=1` — copy step1's skip block (operators rely on the opt-out).
-- Skip knobs are the CI-operator contract — never repurpose or drop one: `DONMAI_SMOKES_SKIP_LIVE_DAEMON=1` (live-daemon steps), `DONMAI_SMOKES_SKIP_INSTALLER=1` (install lifecycle), `DONMAI_SMOKES_SKIP_LIVE_API=1` (live external-API steps, step15). The opencode harness lane (step18) additionally honors `DONMAI_SMOKES_OPENCODE_BIN` (point at a pre-installed binary, skipping resolution/install entirely) and `DONMAI_SMOKES_OPENCODE_PIN` (override the installed/accepted version — used by the pin-bump protocol, `donmai-architecture` 07-design-opencode-spawn.md §8).
-- `DONMAI_ARCH_SOURCE_DIR` points the step16 build at an in-flight source port — keep it honored (operators test unmerged ports with it).
+- **A missing SUT is a FAILURE, not a skip.** `RequireDonmaiSource` / `RequireDonmaiBinary` `t.Fatal` when the checkout cannot be found or will not build. This reverses the old rule ("every smoke `t.Skip`s cleanly when `../donmai` is absent"), which is what let the whole live suite report `ok`. Never classify a build error by its message text to choose between skip and fail — `TestNoSkipDecidedByErrorText` fails the build if you do.
+- **Never call `t.Skip` directly in a live smoke.** Route it so the skip records itself: `SkipIfShort`, `SkipIfKnob`, `SkipIfToolMissing`, `DeclineLive`. `TestSkipDisciplineInLiveSuite` enforces this; a genuinely new precondition goes in its `allowedRawSkips` map with the reason written down.
+- **Order the gate: locate → probe → build.** A capability probe (`os.Stat` on a feature file under the checkout) run BEFORE the checkout is located cannot tell "predates the feature" from "there is no checkout", and used to report the first for the second.
+- New live-daemon smokes honor `-short` AND `DONMAI_SMOKES_SKIP_LIVE_DAEMON=1` — copy step1's gate block (operators rely on the opt-out).
+- Skip knobs are the CI-operator contract — never repurpose or drop one: `DONMAI_SMOKES_SKIP_LIVE_DAEMON=1` (live-daemon steps), `DONMAI_SMOKES_SKIP_INSTALLER=1` (install lifecycle), `DONMAI_SMOKES_SKIP_LIVE_API=1` (live external-API steps, step15). `DONMAI_SMOKES_DONMAI_DIR` points at the donmai checkout under test when it is not a discoverable sibling; a set-but-invalid value FAILS rather than falling back. The opencode harness lane (step18) additionally honors `DONMAI_SMOKES_OPENCODE_BIN` (point at a pre-installed binary, skipping resolution/install entirely) and `DONMAI_SMOKES_OPENCODE_PIN` (override the installed/accepted version — used by the pin-bump protocol, `donmai-architecture` 07-design-opencode-spawn.md §8).
+- `DONMAI_ARCH_SOURCE_DIR` points a step's build at an in-flight source port — keep it honored (operators test unmerged ports with it). It is read in exactly one place, `inFlightSourceDir()` in `inflight_source_test.go`; do not re-read it per step, and do not add a hard-coded feature-worktree fallback (three of those went stale, and a stale one silently prefers unmerged code over main).
 - step16 runs against fake `gh`/`claude` shims prepended to PATH — extend the shims, never invoke the real tools (real calls burn credentials).
 - Logging: `log/slog` to stderr through the harness verbose/quiet toggle (raw prints drown CI logs).
 
@@ -113,11 +125,36 @@ outbound URL.
   bare install test can clobber your real developer daemon service.
 - `kit-toolchain-e2b/run.sh` is a gated cloud-sandbox kit-provisioning smoke:
   requires `E2B_API_KEY`, exits 0 (skip) without it — it never runs by accident.
-- Hosted CI DOES check out `../donmai` (since `ci: run the daemon-lifecycle
-  smokes in hosted CI`, Wave 0.3), so the live steps execute there. Only a
-  local checkout without a sibling skips them via `harness.BuildBinary` →
-  `t.Skipf`. Every run publishes a PASS/FAIL/SKIP tally to the job summary —
-  check it before assuming a green run exercised what you think it did.
+- Hosted CI DOES check out the sibling donmai (since `ci: run the
+  daemon-lifecycle smokes in hosted CI`, Wave 0.3), so the live steps execute
+  there. A local checkout with no sibling now FAILS rather than skipping. Every
+  run publishes a PASS/FAIL/SKIP tally to the job summary, and the suite itself
+  prints a `live-smoke liveness:` line — read the second one: a PASS count says
+  how many tests returned, the liveness line says whether any of them touched
+  the binary.
+
+## Liveness — why a green run is now evidence
+
+`go test` exits 0 for a SKIP exactly as for a PASS. In 2026-08 this suite
+reported `ok github.com/RenseiAI/donmai-smokes 1.251s` from a linked worktree:
+the sibling sat one directory above the hard-coded `../donmai`, every build
+failed, and nine copies of a `strings.Contains(err.Error(), "no such file")`
+heuristic turned each failure into `t.Skip`. **Two RED CONTROLS "passed"
+against it.** A cold donmai build alone takes 60-90s, so the timing was the
+only tell.
+
+Two mechanisms make that shape red now, and you need both because the first
+only catches known causes:
+
+1. **Loud resolution.** An unlocatable or unbuildable SUT fails the test.
+2. **The liveness ledger.** Every live smoke records how its gate resolved —
+   `opted-out` (a human asked), `exercised` (the binary was built and driven),
+   or `declined` (the SUT was found but lacks the surface). A run that DECLINED
+   and exercised nothing is red, whatever the reason for each individual skip.
+   Opt-out-only runs (`-short`, a `DONMAI_SMOKES_SKIP_*` knob) stay green.
+
+To verify the gate itself still bites, remove the SUT and run the suite: the
+live smokes must FAIL, not skip.
 - The sibling is pinned to `ref: main`, a ROLLING target. A smoke asserting
   donmai behaviour that has not merged upstream yet will fail, then pass on a
   re-run once it does — that is NOT a flake. The run's job summary records the

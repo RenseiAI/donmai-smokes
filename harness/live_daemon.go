@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -47,32 +46,24 @@ import (
 // Most caller-specific configuration should land via the daemonYAML
 // body to keep the env-var surface small (per Phase 2 audit § 3.2).
 //
-// Skips the test cleanly when the donmai sibling worktree or
-// the Go toolchain isn't available, so the harness can run standalone
-// for CI flag-parsing checks.
+// Does NOT skip when the donmai checkout is missing: RequireDonmaiBinary
+// fails the test instead. A live-daemon smoke with no daemon to spawn has
+// established nothing, and the skip it used to emit is what let this suite
+// report `ok` while never starting a daemon at all.
 func LiveDaemonWithConfig(t *testing.T, daemonYAML string, extraEnv ...string) (
 	live *LiveDaemon, donmaiBinary string, logBuf *LogTail, home string,
 ) {
 	t.Helper()
 
-	// Build donmai from the sibling donmai checkout. Cold cache
-	// 60-90s; warm sub-second. 3-minute parent context is generous.
-	buildCtx, buildCancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer buildCancel()
-
+	// Build donmai from the located donmai checkout. Cold cache 60-90s;
+	// warm sub-second. GOWORK is cleared (not "off") here so donmai's own
+	// go.mod resolves — see the two-sided GOWORK rule in AGENTS.md.
 	binDir := t.TempDir()
-	donmaiBinary, err := BuildDonmaiBinary(buildCtx, BuildOptions{
+	donmaiBinary, _ = RequireDonmaiBinary(t, LiveBinaryOptions{
 		OutputPath: filepath.Join(binDir, "donmai"),
 		Env:        append(os.Environ(), "GOWORK="),
+		Timeout:    3 * time.Minute,
 	})
-	if err != nil {
-		if strings.Contains(err.Error(), "resolve ../") ||
-			strings.Contains(err.Error(), "no such file") ||
-			strings.Contains(err.Error(), "executable file not found") {
-			t.Skipf("live-daemon donmai binary unavailable: %v", err)
-		}
-		t.Fatalf("build donmai binary: %v", err)
-	}
 
 	port, err := PickFreePort()
 	if err != nil {

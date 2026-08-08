@@ -42,19 +42,6 @@ import (
 	afh "github.com/RenseiAI/donmai-smokes/harness"
 )
 
-// archGoNativeSourceDir is the donmai checkout the arch-assess smoke builds from.
-// The native arch-intel diff-only pipeline (afclient/codeintel/arch_*.go) ships
-// from the donmai module; DONMAI_ARCH_SOURCE_DIR lets an operator point the
-// build at a specific worktree (e.g. donmai.wt/af-arch-deprecation during the
-// port). It defaults to the sibling "../donmai" checkout that the other steps
-// build from.
-func archGoNativeSourceDir() string {
-	if v := strings.TrimSpace(os.Getenv("DONMAI_ARCH_SOURCE_DIR")); v != "" {
-		return v
-	}
-	return "../donmai"
-}
-
 // fixturePRURL is the GitHub PR URL the smoke assesses. The fake `gh` shim
 // responds to `gh pr view <url>` and `gh pr diff <url>` for this exact ref, so
 // the binary's diff-fetch resolves it without any network access.
@@ -181,50 +168,41 @@ func runArchAssess(
 // `donmai arch assess` over a fixture PR diff, asserting the native arch-intel
 // diff-only pipeline's observation emission and gate behaviour.
 //
-// Skipped under -short because building the binary takes 60-90s cold.
+// Skipped under -short and when DONMAI_SMOKES_SKIP_LIVE_DAEMON=1 is set,
+// because building the binary takes 60-90s cold.
 func TestArchAssessNativeEndToEnd(t *testing.T) {
-	if testing.Short() {
-		t.Skip("end-to-end arch-assess smoke; skipped under -short")
-	}
+	afh.SkipIfShort(t, "end-to-end arch-assess smoke")
+	afh.SkipIfKnob(t, afh.SkipLiveDaemonEnv, "operator opted out of live-process smokes")
 
-	// Build the donmai binary from the arch-go-native source (or the sibling
-	// donmai checkout). GOWORK is cleared so the build resolves donmai's own
-	// go.mod rather than an org-root workspace overlay.
-	buildCtx, buildCancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer buildCancel()
-
+	// Build the donmai binary from the located donmai checkout, or from
+	// DONMAI_ARCH_SOURCE_DIR when an operator has pointed it at an in-flight
+	// source port (inFlightSourceDir, inflight_source_test.go — the one place
+	// this suite reads that var). GOWORK=off fully decouples the build from
+	// the org-root go.work overlay: a bare "GOWORK=" leaves go on
+	// auto-discovery, which finds the workspace at the org root and rejects
+	// building the donmai module when it is not listed there (e.g. an
+	// in-flight worktree). "off" makes the build resolve donmai's own
+	// go.mod, matching `make test`'s GOWORK=off discipline — RequireDonmaiBinary's
+	// default.
 	binDir := t.TempDir()
-	donmaiBinary, err := afh.BuildBinary(buildCtx, afh.BuildOptions{
-		SourceDir:  archGoNativeSourceDir(),
-		EntryPoint: "./cmd/donmai",
+	donmaiBinary, _ := afh.RequireDonmaiBinary(t, afh.LiveBinaryOptions{
+		SourceDir:  inFlightSourceDir(),
 		OutputPath: filepath.Join(binDir, "donmai"),
-		// GOWORK=off fully decouples the build from the org-root go.work
-		// overlay. A bare "GOWORK=" leaves go on auto-discovery, which finds
-		// the workspace at the org root and rejects building the donmai module
-		// when it is not listed there (e.g. an arch-go-native worktree). "off"
-		// makes the build resolve donmai's own go.mod, matching `make test`'s
-		// GOWORK=off discipline.
-		Env: append(os.Environ(), "GOWORK=off"),
 	})
-	if err != nil {
-		if strings.Contains(err.Error(), "resolve ../") ||
-			strings.Contains(err.Error(), "no such file") ||
-			strings.Contains(err.Error(), "executable file not found") {
-			t.Skipf("donmai binary unavailable (source %q): %v", archGoNativeSourceDir(), err)
-		}
-		t.Fatalf("build donmai binary: %v", err)
-	}
 
 	// Capability probe: the native arch-intel diff-only pipeline ships the
-	// `arch assess` subcommand. A binary that predates the native port (e.g. the
-	// canonical donmai checkout before the port lands) lacks it and has no native
-	// diff-fetch/gate to assert against — skip cleanly so the gate stays green
-	// until the port merges. DONMAI_ARCH_SOURCE_DIR points the build at the
-	// af-arch-deprecation worktree to exercise the real surface.
+	// `arch assess` subcommand. A binary that predates the native port (e.g.
+	// the canonical donmai checkout before the port lands) lacks it and has no
+	// native diff-fetch/gate to assert against. DONMAI_ARCH_SOURCE_DIR points
+	// the build at an in-flight source port to exercise the real surface.
+	//
+	// This probe runs AFTER the binary built, so it can only mean what it
+	// says. DeclineLive files it as a decline rather than a plain skip: a run
+	// in which every live smoke declines proved nothing and is red.
 	if !binaryHasNativeArchAssess(t, donmaiBinary) {
-		t.Skipf("donmai binary at %q predates the native arch-intel port "+
-			"(no native `arch assess` surface) — build from the af-arch-deprecation "+
-			"worktree via DONMAI_ARCH_SOURCE_DIR to exercise this smoke", donmaiBinary)
+		afh.DeclineLive(t, "donmai binary at %q predates the native arch-intel port "+
+			"(no native `arch assess` surface) — point DONMAI_ARCH_SOURCE_DIR at a "+
+			"checkout that has it to exercise this smoke", donmaiBinary)
 	}
 
 	// Fake `gh` shim — fixture PR view + diff, no network.
