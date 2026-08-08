@@ -42,29 +42,17 @@ var retiredButResolvable = []string{"worker", "fleet"}
 // CHANGELOG entry. A regression that drops a verb or renames a
 // subcommand fires here.
 //
-// Skipped under -short because building the binary takes 60-90s on a
-// cold cache.
+// Skipped under -short and when DONMAI_SMOKES_SKIP_LIVE_DAEMON=1 is set,
+// because building the binary takes 60-90s on a cold cache.
 func TestAfHelpDeprecationGuard(t *testing.T) {
-	if testing.Short() {
-		t.Skip("end-to-end help-output diff; skipped under -short")
-	}
-
-	buildCtx, buildCancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer buildCancel()
+	afh.SkipIfShort(t, "end-to-end help-output diff")
+	afh.SkipIfKnob(t, afh.SkipLiveDaemonEnv, "operator opted out of live-process smokes")
 
 	binDir := t.TempDir()
-	donmaiBinary, err := afh.BuildDonmaiBinary(buildCtx, afh.BuildOptions{
+	donmaiBinary, _ := afh.RequireDonmaiBinary(t, afh.LiveBinaryOptions{
 		OutputPath: binDir + "/donmai",
 		Env:        append(os.Environ(), "GOWORK="),
 	})
-	if err != nil {
-		if strings.Contains(err.Error(), "resolve ../") ||
-			strings.Contains(err.Error(), "no such file") ||
-			strings.Contains(err.Error(), "executable file not found") {
-			t.Skipf("donmai binary unavailable: %v", err)
-		}
-		t.Fatalf("build donmai binary: %v", err)
-	}
 
 	// Top-level surface — the Wave 9 surfaces must be present alongside the
 	// rest of the supported public command set. The

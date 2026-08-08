@@ -140,12 +140,8 @@ func waitForProviderSessionID(ctx context.Context, wtParent, sessionID string, p
 // (observed via state.json) -> deliberate SIGINT teardown -> no orphan
 // `opencode serve` process.
 func TestOpenCodeHarnessSmoke_ServeLane_SpawnReadySessionInitTeardown(t *testing.T) {
-	if testing.Short() {
-		t.Skip("end-to-end agent-run smoke; skipped under -short")
-	}
-	if os.Getenv("DONMAI_SMOKES_SKIP_LIVE_DAEMON") == "1" {
-		t.Skip("DONMAI_SMOKES_SKIP_LIVE_DAEMON=1 — operator opted out of live-process smokes")
-	}
+	afh.SkipIfShort(t, "end-to-end agent-run smoke")
+	afh.SkipIfKnob(t, afh.SkipLiveDaemonEnv, "operator opted out of live-process smokes")
 
 	opencodeBin := afh.EnsureOpenCodeBinary(t)
 	opencodeBinDir := filepath.Dir(opencodeBin)

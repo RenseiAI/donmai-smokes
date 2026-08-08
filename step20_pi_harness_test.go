@@ -160,16 +160,6 @@ func nodeBinDir() string {
 	return ""
 }
 
-// piSourceDir resolves the donmai checkout this smoke builds from, mirroring
-// step18's openCodeSourceDir: DONMAI_ARCH_SOURCE_DIR wins, falling back to
-// the canonical ../donmai sibling.
-func piSourceDir() string {
-	if v := strings.TrimSpace(os.Getenv("DONMAI_ARCH_SOURCE_DIR")); v != "" {
-		return v
-	}
-	return "../donmai"
-}
-
 type piHarnessFixture struct {
 	donmaiBinary string
 	daemonSrv    *httptest.Server
@@ -187,32 +177,20 @@ type piHarnessFixture struct {
 func setupPiHarnessFixture(t *testing.T, testName string, resolvedProfile map[string]any) *piHarnessFixture {
 	t.Helper()
 
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not on PATH")
-	}
+	afh.SkipIfToolMissing(t, "git", "the bare fixture repo this smoke clones is created with git")
 
-	srcDir := piSourceDir()
+	// Locate first, probe second: see step17 for why the old ordering made a
+	// missing checkout indistinguishable from an outdated one.
+	srcDir := afh.RequireDonmaiSourceAt(t, inFlightSourceDir())
 	if _, err := os.Stat(filepath.Join(srcDir, "provider", "harness", "pi", "probe.go")); err != nil {
-		t.Skipf("donmai checkout at %q predates provider/harness/pi/probe.go — "+
-			"point DONMAI_ARCH_SOURCE_DIR at a checkout that has it", srcDir)
+		afh.DeclineLive(t, "donmai checkout at %q predates provider/harness/pi/probe.go — "+
+			"point %s at a checkout that has it", srcDir, inFlightSourceDirEnv)
 	}
 
-	buildCtx, buildCancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer buildCancel()
-	donmaiBinary, err := afh.BuildBinary(buildCtx, afh.BuildOptions{
+	donmaiBinary, _ := afh.RequireDonmaiBinary(t, afh.LiveBinaryOptions{
 		SourceDir:  srcDir,
-		EntryPoint: "./cmd/donmai",
 		OutputPath: filepath.Join(t.TempDir(), "donmai"),
-		Env:        append(os.Environ(), "GOWORK=off"),
 	})
-	if err != nil {
-		if strings.Contains(err.Error(), "resolve ../") ||
-			strings.Contains(err.Error(), "no such file") ||
-			strings.Contains(err.Error(), "executable file not found") {
-			t.Skipf("donmai binary unavailable (source %q): %v", srcDir, err)
-		}
-		t.Fatalf("build donmai binary: %v", err)
-	}
 
 	sessionRepo := afh.MakeBareFixtureRepo(t, "pi-harness-repo-"+testName)
 	sessionID := "smoke-pi-harness-" + testName
@@ -325,12 +303,8 @@ func resolvePiBinDir(t *testing.T) string {
 // Fully offline and deterministic; does not depend on the RPC protocol at
 // all (probe.go's version check runs before any RPC session is opened).
 func TestPiHarnessSmoke_VersionPinGuard(t *testing.T) {
-	if testing.Short() {
-		t.Skip("end-to-end agent-run smoke; skipped under -short")
-	}
-	if os.Getenv("DONMAI_SMOKES_SKIP_LIVE_DAEMON") == "1" {
-		t.Skip("DONMAI_SMOKES_SKIP_LIVE_DAEMON=1 — operator opted out of live-process smokes")
-	}
+	afh.SkipIfShort(t, "end-to-end agent-run smoke")
+	afh.SkipIfKnob(t, afh.SkipLiveDaemonEnv, "operator opted out of live-process smokes")
 
 	f := setupPiHarnessFixture(t, "pinguard", piResolvedProfile())
 
@@ -360,18 +334,15 @@ func TestPiHarnessSmoke_VersionPinGuard(t *testing.T) {
 // supply. A regression to the old protocol re-introduces the spawn failure and
 // fails this test loudly.
 func TestPiHarnessSmoke_RealBinary_HandshakeCompletes(t *testing.T) {
-	if testing.Short() {
-		t.Skip("end-to-end agent-run smoke; skipped under -short")
-	}
-	if os.Getenv("DONMAI_SMOKES_SKIP_LIVE_DAEMON") == "1" {
-		t.Skip("DONMAI_SMOKES_SKIP_LIVE_DAEMON=1 — operator opted out of live-process smokes")
-	}
+	afh.SkipIfShort(t, "end-to-end agent-run smoke")
+	afh.SkipIfKnob(t, afh.SkipLiveDaemonEnv, "operator opted out of live-process smokes")
 
 	piBinDir := resolvePiBinDir(t)
 
 	f := setupPiHarnessFixture(t, "handshake", piResolvedProfile())
 	if f.nodeDir == "" {
-		t.Skip("node not on PATH — pi is a node script and cannot exec; skipping real-binary handshake check")
+		afh.DeclineLive(t, "node not on PATH — pi is a node script and cannot exec, "+
+			"so the real-binary handshake check has nothing to drive")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -428,18 +399,15 @@ func TestPiHarnessSmoke_RealBinary_HandshakeCompletes(t *testing.T) {
 // pi child really runs (handshake completes, model turn in flight), so this
 // exercises real mid-turn teardown.
 func TestPiHarnessSmoke_RealBinary_Teardown(t *testing.T) {
-	if testing.Short() {
-		t.Skip("end-to-end agent-run smoke; skipped under -short")
-	}
-	if os.Getenv("DONMAI_SMOKES_SKIP_LIVE_DAEMON") == "1" {
-		t.Skip("DONMAI_SMOKES_SKIP_LIVE_DAEMON=1 — operator opted out of live-process smokes")
-	}
+	afh.SkipIfShort(t, "end-to-end agent-run smoke")
+	afh.SkipIfKnob(t, afh.SkipLiveDaemonEnv, "operator opted out of live-process smokes")
 
 	piBinDir := resolvePiBinDir(t)
 
 	f := setupPiHarnessFixture(t, "teardown", piResolvedProfile())
 	if f.nodeDir == "" {
-		t.Skip("node not on PATH — pi is a node script and cannot exec; skipping real-binary teardown check")
+		afh.DeclineLive(t, "node not on PATH — pi is a node script and cannot exec, "+
+			"so the real-binary teardown check has nothing to drive")
 	}
 
 	pathEntries := f.pathEntries(piBinDir)

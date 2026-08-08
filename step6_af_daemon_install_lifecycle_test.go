@@ -48,34 +48,19 @@ import (
 // `--skip-service-manager` flag set, asserting the unit file is
 // written on install and removed on uninstall.
 func TestAfDaemonInstallLifecycle(t *testing.T) {
-	if testing.Short() {
-		t.Skip("install lifecycle smoke; skipped under -short")
-	}
-	if os.Getenv("DONMAI_SMOKES_SKIP_INSTALLER") == "1" {
-		t.Skip("DONMAI_SMOKES_SKIP_INSTALLER=1 — operator opted out of the install lifecycle smoke")
-	}
+	afh.SkipIfShort(t, "install lifecycle smoke")
+	afh.SkipIfKnob(t, "DONMAI_SMOKES_SKIP_INSTALLER", "operator opted out of the install lifecycle smoke")
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		t.Skipf("install lifecycle smoke only runs on darwin/linux; got %s", runtime.GOOS)
 	}
 
-	// Build donmai from the sibling donmai checkout. Cold cache
-	// 60-90s; warm sub-second. 3-minute parent context is generous.
-	buildCtx, buildCancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer buildCancel()
-
+	// Build donmai from the located donmai checkout. Cold cache
+	// 60-90s; warm sub-second.
 	binDir := t.TempDir()
-	donmaiBinary, err := afh.BuildDonmaiBinary(buildCtx, afh.BuildOptions{
+	donmaiBinary, _ := afh.RequireDonmaiBinary(t, afh.LiveBinaryOptions{
 		OutputPath: filepath.Join(binDir, "donmai"),
 		Env:        append(os.Environ(), "GOWORK="),
 	})
-	if err != nil {
-		if strings.Contains(err.Error(), "resolve ../") ||
-			strings.Contains(err.Error(), "no such file") ||
-			strings.Contains(err.Error(), "executable file not found") {
-			t.Skipf("donmai binary unavailable: %v", err)
-		}
-		t.Fatalf("build donmai binary: %v", err)
-	}
 
 	// Hermetic HOME — both installers resolve the service file path via
 	// os.UserHomeDir() (HOME is checked first), so this redirects the

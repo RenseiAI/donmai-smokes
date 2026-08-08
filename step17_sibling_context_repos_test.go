@@ -76,23 +76,6 @@ exit 1
 	}
 }
 
-// siblingSourceDir resolves the donmai checkout this smoke builds from.
-// DONMAI_ARCH_SOURCE_DIR (the harness-wide in-flight-source override,
-// see step16) wins; otherwise the sibling-context-repos feature worktree
-// is preferred while the branch is unmerged (org worktree convention:
-// ../donmai.wt/<branch>), falling back to the canonical ../donmai
-// sibling checkout — valid post-merge, when the feature is on main.
-func siblingSourceDir() string {
-	if v := strings.TrimSpace(os.Getenv("DONMAI_ARCH_SOURCE_DIR")); v != "" {
-		return v
-	}
-	const featureWorktree = "../donmai.wt/sibling-context-repos"
-	if fi, err := os.Stat(featureWorktree); err == nil && fi.IsDir() {
-		return featureWorktree
-	}
-	return "../donmai"
-}
-
 // TestSiblingContextReposSmoke builds the donmai binary, seeds local bare
 // fixture repos, and drives one `donmai agent run` stub session with
 // DONMAI_SIBLING_REPOS in the worker's process env, asserting the sibling
@@ -102,47 +85,34 @@ func siblingSourceDir() string {
 // (step1's operator opt-out; no daemon is spawned here, but the smoke
 // runs a live worker process end-to-end, which is what the knob gates).
 func TestSiblingContextReposSmoke(t *testing.T) {
-	if testing.Short() {
-		t.Skip("end-to-end agent-run smoke; skipped under -short")
-	}
-	if os.Getenv("DONMAI_SMOKES_SKIP_LIVE_DAEMON") == "1" {
-		t.Skip("DONMAI_SMOKES_SKIP_LIVE_DAEMON=1 — operator opted out of live-process smokes")
-	}
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not on PATH")
-	}
+	afh.SkipIfShort(t, "end-to-end agent-run smoke")
+	afh.SkipIfKnob(t, afh.SkipLiveDaemonEnv, "operator opted out of live-process smokes")
+	afh.SkipIfToolMissing(t, "git", "the bare fixture repos this smoke clones are created with git")
 
-	srcDir := siblingSourceDir()
+	// Locate the checkout FIRST. The capability probe below cannot tell an
+	// absent checkout from an old one — os.Stat on a file inside a directory
+	// that does not exist fails identically either way — so before this
+	// ordering a missing sibling reported itself as "predates the feature"
+	// and skipped. RequireDonmaiSourceAt fails loudly instead, which leaves
+	// the probe free to mean only what it says.
+	srcDir := afh.RequireDonmaiSourceAt(t, inFlightSourceDir())
 
 	// Capability probe: the sibling-provisioning seam lives in
 	// runner/siblings.go. A checkout that predates the feature has no
-	// surface to assert against — skip cleanly so the gate stays green
-	// until the branch merges (mirror of step16's predates-the-port skip).
+	// surface to assert against.
 	if _, err := os.Stat(filepath.Join(srcDir, "runner", "siblings.go")); err != nil {
-		t.Skipf("donmai checkout at %q predates the sibling-context-repos feature "+
-			"(no runner/siblings.go) — point DONMAI_ARCH_SOURCE_DIR at the feature "+
-			"worktree to exercise this smoke", srcDir)
+		afh.DeclineLive(t, "donmai checkout at %q predates the sibling-context-repos feature "+
+			"(no runner/siblings.go) — point %s at a checkout that has it",
+			srcDir, inFlightSourceDirEnv)
 	}
 
 	// Build the donmai binary. GOWORK=off decouples the build from any
-	// org-root go.work overlay (matching step16 — a worktree source dir
-	// is typically not listed in the workspace).
-	buildCtx, buildCancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer buildCancel()
-	donmaiBinary, err := afh.BuildBinary(buildCtx, afh.BuildOptions{
+	// org-root go.work overlay (a worktree source dir is typically not
+	// listed in the workspace) — RequireDonmaiBinary's default.
+	donmaiBinary, _ := afh.RequireDonmaiBinary(t, afh.LiveBinaryOptions{
 		SourceDir:  srcDir,
-		EntryPoint: "./cmd/donmai",
 		OutputPath: filepath.Join(t.TempDir(), "donmai"),
-		Env:        append(os.Environ(), "GOWORK=off"),
 	})
-	if err != nil {
-		if strings.Contains(err.Error(), "resolve ../") ||
-			strings.Contains(err.Error(), "no such file") ||
-			strings.Contains(err.Error(), "executable file not found") {
-			t.Skipf("donmai binary unavailable (source %q): %v", srcDir, err)
-		}
-		t.Fatalf("build donmai binary: %v", err)
-	}
 
 	// Local bare fixture repos: one the session clones as its worktree,
 	// two good siblings (the second consumed via #<ref>), plus one
