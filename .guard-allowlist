@@ -44,6 +44,6 @@ CLOSED_ENV_VAR :: ^AGENTS\.md:91$ :: RENS[E]I_TEST_TOKEN
 # own header comment. Its token table assembles each banned string from
 # fragments so the file declaring the guard doesn't trip it, except the
 # Linear-host entry, which only splits off the "api." prefix and leaves
-# "linear.app/graphql" whole in one string literal. That is test data for a
+# "l[i]near.app/graphql" whole in one string literal. That is test data for a
 # complementary guard, not a leak: pinned to the exact line.
 TRACKER_URL :: ^interactive/boundary_test\.go:26$ :: l[i]near\.app/graphql
