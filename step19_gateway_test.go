@@ -654,6 +654,15 @@ func TestGatewaySmoke_WorkerLocalBinding_CompletesTurn(t *testing.T) {
 		t.Fatalf("the worker could not bind a gateway session for a gateway-served cell.\n--- stderr ---\n%s", stderr)
 	}
 
+	// A PRE-SPAWN adaptation denial kills the session before pi is executed, so
+	// zero turns reach the upstream and every assertion below reports a
+	// downstream symptom (no relay, no completion, no ledger row) instead of the
+	// cause. Diagnose it first. Additive: the asserts that follow are unchanged.
+	if detail := afh.ExplainAdaptationDenial(stdout + stderr); detail != "" {
+		t.Fatalf("the gateway lane's session was denied before spawn, so no turn could reach the upstream.\n\n%s\n"+
+			"--- stdout ---\n%s\n--- stderr ---\n%s", detail, stdout, stderr)
+	}
+
 	// (1) the gateway relayed the turn to the upstream.
 	completions := upstream.completions()
 	if len(completions) == 0 {
