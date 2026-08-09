@@ -49,8 +49,8 @@ package smokes
 // # Scope honesty
 //
 //   - PROVEN here: the whole binding → harness → completed-turn → metering path
-//     against the REAL gateway code in the REAL binaries, with no provider
-//     credential reaching the harness child.
+//     against the REAL gateway code in the REAL binaries, with no worker-only
+//     gateway credential or route reaching the real Pi child.
 //   - NOT proven here: a PLATFORM resolver choosing a gateway cell (this lane
 //     supplies the resolved profile itself, as every step18/step20 lane does),
 //     cross-protocol surfaces (gateway M2), or any matrix-cell promotion — this
@@ -107,6 +107,7 @@ const gatewayUpstreamKey = "sk-step19-worker-held-not-a-real-key" //nolint:gosec
 const (
 	gatewayEnvUpstreamBaseURL = "DONMAI_GATEWAY_UPSTREAM_BASE_URL"
 	gatewayEnvUpstreamKey     = "DONMAI_GATEWAY_UPSTREAM_API_KEY" //nolint:gosec // G101: env-var NAME, not a credential.
+	gatewayEnvOpenAIAPIKey    = "OPENAI_API_KEY"                  //nolint:gosec // G101: env-var NAME, not a credential.
 )
 
 // gatewayStageBudgetSeconds bounds the completed-turn session: enough for a cold
@@ -319,9 +320,25 @@ type gatewayFixture struct {
 	upstreamKey     string
 }
 
-// setupGatewayFixture builds the donmai binary from the sibling checkout and
-// stands up the daemon-control fixture carrying a gateway-served resolved
-// profile. Skips cleanly when the sibling checkout predates the worker-local
+// gatewaySourceDir resolves the worker-local gateway checkout. The explicit
+// in-flight source override wins. Otherwise it supports both the primary
+// donmai-smokes checkout (../donmai) and a linked worktree (../../donmai), while
+// retaining the ordinary missing-sibling skip on hosted CI.
+func gatewaySourceDir() string {
+	if v := strings.TrimSpace(os.Getenv("DONMAI_ARCH_SOURCE_DIR")); v != "" {
+		return v
+	}
+	for _, candidate := range []string{"../donmai", "../../donmai"} {
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return candidate
+		}
+	}
+	return "../donmai"
+}
+
+// setupGatewayFixture builds the donmai binary from the gateway source checkout
+// and stands up the daemon-control fixture carrying a gateway-served resolved
+// profile. Skips cleanly when the source checkout predates the worker-local
 // gateway producer this lane pins against.
 func setupGatewayFixture(t *testing.T, testName string, resolvedProfile map[string]any, stageBudgetSeconds int) *gatewayFixture {
 	t.Helper()
@@ -330,7 +347,7 @@ func setupGatewayFixture(t *testing.T, testName string, resolvedProfile map[stri
 		t.Skip("git not on PATH")
 	}
 
-	srcDir := piSourceDir()
+	srcDir := gatewaySourceDir()
 	producer := filepath.Join(srcDir, "afcli", "gateway_bind.go")
 	if _, err := os.Stat(producer); err != nil {
 		t.Skipf("donmai checkout at %q predates the worker-local gateway producer (afcli/gateway_bind.go) this "+
@@ -405,6 +422,73 @@ func (f *gatewayFixture) pathEntries(extra ...string) []string {
 		entries = append(entries, f.nodeDir)
 	}
 	return append(entries, "/usr/bin", "/bin", "/usr/sbin", "/sbin")
+}
+
+// writeGatewayPiWrapper prepends a wrapper for the real pi executable. It
+// records only whether sensitive worker-only variables are present in pi's RPC
+// child environment, then execs the real binary without changing its arguments.
+func writeGatewayPiWrapper(t *testing.T, realPi, dir, observationPath string) {
+	t.Helper()
+
+	realPiPath := filepath.Join(dir, "pi-real")
+	if err := os.Symlink(realPi, realPiPath); err != nil {
+		data, readErr := os.ReadFile(realPi)
+		if readErr != nil {
+			t.Fatalf("read real pi executable for wrapper: %v", readErr)
+		}
+		if writeErr := os.WriteFile(realPiPath, data, 0o755); writeErr != nil { //nolint:gosec // executable wrapper fallback needs the exec bit.
+			t.Fatalf("copy real pi executable for wrapper: %v", writeErr)
+		}
+	}
+
+	const script = `#!/bin/sh
+case " $* " in
+  *" --mode rpc "*)
+    {
+      for key in DONMAI_GATEWAY_UPSTREAM_API_KEY DONMAI_GATEWAY_UPSTREAM_BASE_URL OPENAI_API_KEY; do
+        if printenv "$key" >/dev/null 2>&1; then
+          printf '%%s=present\n' "$key"
+        else
+          printf '%%s=absent\n' "$key"
+        fi
+      done
+    } > %s
+    ;;
+esac
+exec "$(dirname "$0")/pi-real" "$@"
+`
+	if err := os.WriteFile(filepath.Join(dir, "pi"), []byte(fmt.Sprintf(script, gatewayShellQuote(observationPath))), 0o755); err != nil { //nolint:gosec // executable wrapper needs the exec bit.
+		t.Fatalf("write pi environment-observation wrapper: %v", err)
+	}
+}
+
+func gatewayShellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}
+
+// assertGatewayPiCredentialIsolation proves the real pi RPC child did not
+// inherit worker-only gateway configuration. The wrapper records presence only,
+// never any credential or route value.
+func assertGatewayPiCredentialIsolation(t *testing.T, observationPath string) {
+	t.Helper()
+
+	data, err := os.ReadFile(observationPath)
+	if err != nil {
+		t.Fatalf("read real pi environment observation: %v", err)
+	}
+	observed := make(map[string]string)
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		key, state, ok := strings.Cut(line, "=")
+		if !ok {
+			t.Fatalf("malformed real pi environment observation")
+		}
+		observed[key] = state
+	}
+	for _, key := range []string{gatewayEnvUpstreamKey, gatewayEnvUpstreamBaseURL, gatewayEnvOpenAIAPIKey} {
+		if state := observed[key]; state != "absent" {
+			t.Errorf("real pi RPC child inherited %s (state=%q); want absent", key, state)
+		}
+	}
 }
 
 // ledgerPath finds the cost ledger the worker-local gateway wrote under the
@@ -534,7 +618,9 @@ func readGatewayCostEvents(t *testing.T, path string) []gatewayCostEvent {
 //     that makes a gateway cell worth having.
 //  3. The turn COMPLETED: the runner consumed the assistant text (marker /
 //     verdict) and reached a terminal — not spawn-failed, not budget-exceeded.
-//  4. A cost-ledger row landed carrying the `harness` column and host=gateway
+//  4. A wrapper around the REAL Pi executable observed that the real RPC child
+//     received none of the worker-only upstream credential or route variables.
+//  5. A cost-ledger row landed carrying the `harness` column and host=gateway
 //     (08 §7/§10 item 5), which is what makes a gateway turn accountable.
 func TestGatewaySmoke_WorkerLocalBinding_CompletesTurn(t *testing.T) {
 	if testing.Short() {
@@ -544,7 +630,10 @@ func TestGatewaySmoke_WorkerLocalBinding_CompletesTurn(t *testing.T) {
 		t.Skip("DONMAI_SMOKES_SKIP_LIVE_DAEMON=1 — operator opted out of live-process smokes")
 	}
 
-	piBinDir := resolvePiBinDir(t)
+	realPi := afh.EnsurePiBinary(t)
+	piBinDir := t.TempDir()
+	piObservationPath := filepath.Join(t.TempDir(), "pi-env-observation")
+	writeGatewayPiWrapper(t, realPi, piBinDir, piObservationPath)
 	model := piModel()
 	upstream := newGatewayUpstream(t, model)
 
@@ -610,7 +699,10 @@ func TestGatewaySmoke_WorkerLocalBinding_CompletesTurn(t *testing.T) {
 			"the gateway binding but the session did not reach a completed terminal", res.Status, res.FailureMode, res.Error)
 	}
 
-	// (4) the turn is accounted for: a ledger row with the harness column.
+	// (4) the real pi RPC child inherits no worker-only gateway configuration.
+	assertGatewayPiCredentialIsolation(t, piObservationPath)
+
+	// (5) the turn is accounted for: a ledger row with the harness column.
 	ledger := f.ledgerPath()
 	events := readGatewayCostEvents(t, ledger)
 	if len(events) == 0 {
