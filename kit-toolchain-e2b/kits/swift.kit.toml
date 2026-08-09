@@ -1,0 +1,66 @@
+# swift.kit.toml — kit manifest for the Swift cloud-sandbox toolchain proof.
+#
+# STANDALONE COPY of the SIGNED published contract: the toolchain-relevant
+# blocks below ([kit] id/version, [supports], [detect],
+# [provide.toolchain_install.linux] swift_6, [composition]) are copied VERBATIM
+# from the donmai-kits catalog's `kits/swift/kit.toml` (default/swift v1.0.0,
+# signed via the catalog's keyless-sigstore sign workflow on main). Source of
+# truth: donmai-kits kits/swift/kit.toml — if that manifest changes, refresh
+# this copy. Kept local (not installed into ~/.donmai/kits) so the proof runs
+# without mutating the operator's daemon state, exactly like ts-next.kit.toml.
+#
+# Two DELIBERATE smoke-local deviations, both documented:
+#   1. `base_prereqs` toolchain_install key (sorts BEFORE `swift_6` — donmai
+#      sorts keys within a kit for determinism): the e2b base image is a
+#      minimal debian bookworm without Swift's system dependencies (libcurl
+#      dev, libedit, z3, python3 headers, ...). swiftly's system-dependency
+#      check fails without them. This mirrors ts-next.kit.toml's apt prep for
+#      the same base image; the published kit assumes a cloud image carrying
+#      build essentials. Dep list = swift.org's Debian 12 requirements.
+#   2. post_acquire is INLINED. The published kit's hook is a FILE
+#      ("bin/setup.sh"); this driver execs hook strings as inline commands, so
+#      the hook body's two load-bearing effects are inlined verbatim-equivalent:
+#      source swiftly's env.sh (PATH-mutating installer — `swift` is NOT on
+#      PATH in a fresh shell otherwise), then `swift package resolve`.
+
+api = "v1"
+
+[kit]
+id = "default/swift"
+version = "1.0.0"
+name = "Swift"
+description = "Swift 6 toolchain (via swiftly) + SPM resolve for Package.swift repos"
+author = "donmai"
+priority = 70
+
+[supports]
+os = ["linux", "macos"]
+arch = ["x86_64", "arm64"]
+
+# Declarative detection: any Swift Package Manager project.
+[detect]
+files = ["Package.swift"]
+
+[composition]
+# foundation kits own the base toolchain layer and run first.
+order = "foundation"
+
+# Per-OS toolchain install. Cloud sandboxes are Linux -> .linux is load-bearing.
+# `base_prereqs` is smoke-local (see header, deviation 1). `swift_6` is the
+# published kit's line VERBATIM: the swiftly tarball URL branches on
+# $(uname -m) -> x86_64 | aarch64 (a hardcoded arch URL breaks arm64 cloud
+# images), and the install sources swiftly's env file so `swift` is on PATH
+# for the same shell.
+[provide.toolchain_install.linux]
+base_prereqs = "export DEBIAN_FRONTEND=noninteractive && apt-get update -y && apt-get install -y ca-certificates curl gnupg2 binutils git libc6-dev libcurl4-openssl-dev libedit2 libgcc-12-dev libncurses-dev libpython3-dev libsqlite3-0 libstdc++-12-dev libxml2-dev libz3-dev pkg-config tzdata unzip zlib1g-dev"
+swift_6 = "curl -fsSL https://download.swift.org/swiftly/linux/swiftly-$(uname -m).tar.gz -o /tmp/swiftly.tgz && tar -xzf /tmp/swiftly.tgz -C /tmp && /tmp/swiftly init --assume-yes --skip-install --no-modify-profile && . \"$HOME/.local/share/swiftly/env.sh\" && swiftly install 6.0.3 && swiftly use 6.0.3"
+
+# macOS parity, copied for fidelity — never exercised here (TARGET_OS=linux).
+[provide.toolchain_install.macos]
+swift_6 = "curl -fsSL https://download.swift.org/swiftly/darwin/swiftly.pkg -o /tmp/swiftly.pkg && installer -pkg /tmp/swiftly.pkg -target CurrentUserHomeDirectory && . \"$HOME/.swiftly/env.sh\" && swiftly install 6.0.3 && swiftly use 6.0.3"
+
+# post_acquire runs AFTER toolchain_install and AFTER the repo is in place
+# (the kits pivot). Inlined equivalent of the published kit's bin/setup.sh
+# (see header, deviation 2): re-source swiftly env, resolve SPM dependencies.
+[provide.hooks]
+post_acquire = "if [ -f \"$HOME/.local/share/swiftly/env.sh\" ]; then . \"$HOME/.local/share/swiftly/env.sh\"; fi; swift package resolve"
