@@ -500,6 +500,32 @@ exit 1
 	}
 }
 
+// writeMinimalPiVersionShim writes a fake `pi` that answers ONLY --version
+// (with a version at the pin) and otherwise exits immediately without
+// speaking RPC. A `pi` binary entirely absent from PATH is a HARD provider-
+// construction failure (agent.ErrProviderUnavailable — exec.LookPath fails,
+// "pi" never joins the registry, and admission denies with
+// harness_unavailable before Spawn is ever reached); this is a materially
+// different, and stricter, failure than the soft "unverified" label a
+// confirmed-but-unparseable version probe gets. The decorator-seam checks
+// below assert properties that live INSIDE Spawn (materialization/digest
+// verification happen before any child process execs), so they need
+// provider CONSTRUCTION to succeed without needing the shim to do anything
+// beyond that — no real pi/RPC capability required.
+func writeMinimalPiVersionShim(t *testing.T, dir string) {
+	t.Helper()
+	const script = `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "0.80.10"
+  exit 0
+fi
+exit 1
+`
+	if err := os.WriteFile(filepath.Join(dir, "pi"), []byte(script), 0o755); err != nil { //nolint:gosec // executable shim needs the exec bit.
+		t.Fatalf("write minimal pi version-probe shim: %v", err)
+	}
+}
+
 // ── checks ──────────────────────────────────────────────────────────────
 
 // TestPiExtensionSeam_OfflineEnvPosture proves ADR-2026-08-12 D4.3: every
@@ -546,10 +572,16 @@ func TestPiExtensionSeam_OfflineEnvPosture(t *testing.T) {
 // contract (D1.2/D2(b)) AND that the embedder decorator hook's registration
 // is actually observed reaching materialization (agent/spec_decorator.go's
 // "embedder-shaped registration" — afcli.Config.AgentSpecExtensionDecorator
-// -> agent.DecorateProvider -> Spec.AdditionalExtensions). Neither
-// sub-check needs a real pi/node binary: both properties are decided in Go,
-// before any child process execs (materializeAdditionalExtensions runs
-// ahead of spawnChild in donmai's pi provider). This always runs — see
+// -> agent.DecorateProvider -> Spec.AdditionalExtensions). Neither sub-check
+// needs a REAL pi/node binary — the assertions live entirely inside Spawn,
+// before any real child process execs (materializeAdditionalExtensions runs
+// ahead of spawnChild in donmai's pi provider) — but a `pi` binary entirely
+// absent from PATH IS a hard provider-construction failure that excludes
+// "pi" from the registry and denies at admission before Spawn is ever
+// reached (a materially different failure than the ones asserted here). So
+// both sub-checks run against a minimal fake `pi` that answers only
+// --version (writeMinimalPiVersionShim): enough to satisfy provider
+// construction, nothing more. This always runs — see
 // TestPiExtensionSeam_OfflineEnvPosture's doc comment on donmai-smokes#30.
 func TestPiExtensionSeam_DecoratorSeam(t *testing.T) {
 	afh.SkipIfShort(t, "end-to-end agent-run smoke")
@@ -558,6 +590,9 @@ func TestPiExtensionSeam_DecoratorSeam(t *testing.T) {
 
 	sourceDir := requirePiExtensionSeamSource(t)
 	embedder := buildPiSeamEmbedderHarness(t, sourceDir)
+
+	shimDir := t.TempDir()
+	writeMinimalPiVersionShim(t, shimDir)
 
 	t.Run("DigestMismatchFailsClosedPreSpawn", func(t *testing.T) {
 		repository := afh.MakeBareFixtureRepo(t, "pi-seam-digest-mismatch-repo")
@@ -577,7 +612,7 @@ func TestPiExtensionSeam_DecoratorSeam(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		stdout, stderr, runErr := fixture.run(t, ctx, extraEnv)
+		stdout, stderr, runErr := fixture.run(t, ctx, extraEnv, shimDir)
 		if runErr == nil {
 			t.Fatalf("agent run succeeded despite a tampered digest delivery; want a fail-closed pre-spawn denial.\n"+
 				"--- stdout ---\n%s\n--- stderr ---\n%s", stdout, stderr)
@@ -609,12 +644,13 @@ func TestPiExtensionSeam_DecoratorSeam(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		// The run itself is expected to fail or time out later (no real pi,
-		// no model credential) — irrelevant here. What matters is whether
+		// The run itself is expected to fail or time out later (the fake pi
+		// shim never speaks real RPC, and no model credential is supplied
+		// either) — irrelevant here. What matters is whether
 		// materializeAdditionalExtensions ran at all, which only happens if
 		// the embedder's AgentSpecExtensionDecorator successfully appended
 		// this delivery onto Spec.AdditionalExtensions before Spawn.
-		stdout, stderr, _ := fixture.run(t, ctx, extraEnv)
+		stdout, stderr, _ := fixture.run(t, ctx, extraEnv, shimDir)
 
 		// donmai's sanitizeInjectedBasename names the materialized file
 		// "<id>-<basename>" under <cwd>/.pi/extensions-injected/.
