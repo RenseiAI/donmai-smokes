@@ -12,6 +12,18 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  # W0(schedule): this suite previously ran ONLY on its own repo's PRs/pushes
+  # — a regression landing on donmai@main went undetected here until someone
+  # next touched donmai-smokes itself (the exact gap that let a broken pi
+  # harness ship through multiple donmai releases before donmai#215 caught
+  # it manually). The nightly `ref: main` checkout above already floats to
+  # whatever donmai@main is at run time, so a schedule trigger alone turns
+  # this into a daily regression watch with zero further wiring.
+  # 07:18 UTC sits between rensei-smokes' smoke-nightly.yml (06:00 UTC) and
+  # its daily-node-smokes.yml (08:00 UTC) — offset so all three don't queue
+  # runners at the same top of the hour.
+  schedule:
+    - cron: "18 7 * * *"
 
 concurrency:
   group: test-${{ github.ref }}
@@ -95,11 +107,16 @@ jobs:
         with:
           python-version: "3.12"
 
-      # Node/npm for the opencode harness lane (step18): npm is how
-      # harness/opencode_install.go installs the pinned opencode-ai CLI
-      # when it isn't already on PATH — mirrors the setup-go/setup-python
-      # steps above (pin the toolchain via its dedicated setup action
-      # rather than trusting whatever the runner image ships).
+      # Node/npm for the opencode harness lane (step18) AND the pi harness
+      # lane (step20): npm is how harness/opencode_install.go and
+      # harness/pi_install.go install their respective pinned CLIs when not
+      # already on PATH, and step20's real-binary tests additionally need
+      # `node` itself directly on PATH — `pi` is a `#!/usr/bin/env node`
+      # script, so without node here those tests DeclineLive (a recorded,
+      # but still silent-in-the-tally, skip) instead of exercising the real
+      # binary. Mirrors the setup-go/setup-python steps above (pin the
+      # toolchain via its dedicated setup action rather than trusting
+      # whatever the runner image ships).
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
@@ -222,6 +239,38 @@ jobs:
             exit 1
           fi
           echo "Gate-liveness OK: daemon-lifecycle canary executed (PASS observed, no SKIP)."
+
+      # W0(schedule) pi-lane liveness guard: step20's real-binary tests are
+      # the coverage that would have caught the broken pi RPC/extension
+      # protocol donmai#215 had to fix by hand — but they sit behind FOUR
+      # independent skip paths (-short, DONMAI_SMOKES_SKIP_LIVE_DAEMON, no
+      # `node` on PATH, a donmai checkout predating
+      # provider/harness/pi/probe.go), any one of which turns a real
+      # regression into a quiet "ok" run. Node is already on PATH
+      # (setup-node above) and none of the skip knobs are set here, so these
+      # three tests currently PASS every run (verified: run 31658167972,
+      # 2026-08-13, ubuntu+macos both green in ~15-24s each) — this step
+      # exists so that changes ever regressing.
+      - name: Guard — pi harness real-binary lane must actually execute
+        working-directory: donmai-smokes
+        run: |
+          LOG="${RUNNER_TEMP}/gotest.log"
+          fail=0
+          for name in TestPiHarnessSmoke_RealBinary_HandshakeCompletes \
+                      TestPiHarnessSmoke_RealBinary_Teardown \
+                      TestPiHarnessSmoke_RealBinary_CompletedTurn; do
+            if grep -Eq "^\s*--- SKIP: ${name}\b" "$LOG"; then
+              echo "::error::${name} SKIPPED — the pi harness real-binary lane did not run in hosted CI (node/pi resolution or donmai@${DONMAI_SHA_UNDER_TEST:-unknown} checkout did not take effect). This is the exact silent-skip shape that let a broken pi protocol ship undetected."
+              fail=1
+            elif ! grep -Eq "^\s*--- PASS: ${name}\b" "$LOG"; then
+              echo "::error::${name} did not report PASS — pi harness real-binary coverage did not execute (donmai@${DONMAI_SHA_UNDER_TEST:-unknown})."
+              fail=1
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then
+            exit 1
+          fi
+          echo "Gate-liveness OK: pi harness real-binary lane executed (PASS observed for all 3 canaries, no SKIP)."
 
   lint:
     name: lint
