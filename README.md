@@ -61,8 +61,8 @@ make lint                                           # golangci-lint run ./...
 
 ### Hermetic pull-request gate
 
-The stable `test-hermetic` check in `.github/workflows/test.yml` runs the
-script above on every matching pull request. It checks out only this
+The stable `test-hermetic` check in `.github/workflows/hermetic.yml` runs the
+script above on every pull request. It checks out only this
 repository, installs the Go toolchain from `go.mod`, and requires no sibling
 checkout, running daemon, credential, installer, external API, or optional
 process tool. Tests that need any of those dependencies use the existing
