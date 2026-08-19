@@ -47,10 +47,20 @@ When a row matches, read that doc before your next edit and follow it literally.
 ## Gates — "done" means these passed
 
 ```bash
+./scripts/run-hermetic-tests.sh # required PR gate: race + short + count floor
 make test    # GOWORK=off go test -race ./...   (the race flag is mandatory)
 make lint    # golangci-lint run ./...
 make fmt     # gofumpt -w .
 ```
+
+The `test-hermetic` pull-request check runs
+`GOWORK=off go test -race -short -count=1 -v ./...` through that script. It
+needs only this checkout and the Go toolchain: no sibling source checkout,
+daemon, credentials, installer, external API, or optional process tool. The
+script reports PASS/FAIL/SKIP totals (including subtests) and enforces a
+measured passed-test floor so a silently collapsed subset is a failure. Live
+lanes remain part of `make test` and must opt out through their existing
+`SkipIfShort` gate when `-short` is set.
 
 CI (`.github/workflows/test.yml`) runs `go vet`, `GOWORK=off go test -race -v
 ./...` (ubuntu + macos matrix), and golangci-lint — aligned with the Makefile

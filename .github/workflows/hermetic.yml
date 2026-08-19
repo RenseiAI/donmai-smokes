@@ -1,0 +1,26 @@
+name: hermetic
+
+on:
+  pull_request:
+
+jobs:
+  test-hermetic:
+    name: test-hermetic
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.mod
+
+      - name: Run hermetic test gate
+        run: ./scripts/run-hermetic-tests.sh
