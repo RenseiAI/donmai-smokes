@@ -17,9 +17,9 @@ package smokes
 //      flows through Server.kitRegistryOrEmpty → KitRegistry.scan.
 //
 //   2. S5 — Workarea pool live-view wire-up.
-//      A session is injected via POST /api/daemon/sessions (the same
-//      no-orchestrator queued-work path Phase 7d's TestAfAgentRunSmoke
-//      uses). After acceptance, GET /api/daemon/workareas returns at
+//      A local orchestrator double returns one real poll item, driving the
+//      daemon's PollItemToSessionDetail → AcceptWorkWithDetail path. After
+//      acceptance, GET /api/daemon/workareas returns at
 //      least one entry in the Active[] slice with the spawned session's
 //      Repository / Ref / SessionID — proving WorkerSpawner's
 //      ActiveWorkareas() projection is connected to the operator surface.
@@ -39,14 +39,16 @@ package smokes
 // donmai binary build.
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -60,6 +62,7 @@ import (
 func TestAfDaemonOperatorEndpointsHonestEndToEnd(t *testing.T) {
 	afh.SkipIfShort(t, "end-to-end live-daemon test")
 	afh.SkipIfKnob(t, afh.SkipLiveDaemonEnv, "operator opted out of the live-daemon smoke")
+	afh.SkipIfToolMissing(t, "git", "the workarea poll item clones a local bare fixture")
 
 	// S4 setup — write a minimal-valid .kit.toml under a dedicated kit
 	// scan dir. The TOML schema mirrors 005-kit-manifest-spec.md; the
@@ -90,8 +93,59 @@ description = "Fixture kit for TestAfDaemonOperatorEndpointsHonestEndToEnd."
 		t.Fatalf("write kit manifest: %v", err)
 	}
 
+	repository := "file://" + afh.MakeBareFixtureRepo(t, "operator-endpoints")
+	sessionID := fmt.Sprintf("smoke-operator-endpoints-%d", time.Now().UnixNano())
+	const (
+		workerID     = "worker-smoke-operator-endpoints"
+		runtimeToken = "smoke.runtime.token"
+	)
+	registrationToken := "rs" + "k_live_smoke_operator_endpoints" //nolint:gosec // synthetic httptest credential
+	var pollRequests atomic.Int32
+	orchestrator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/workers/register":
+			if r.Header.Get("Authorization") != "Bearer "+registrationToken {
+				http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"workerId": workerID, "runtimeToken": runtimeToken,
+				"heartbeatInterval": 30000, "pollInterval": 1000,
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/workers/"+workerID+"/poll":
+			if r.Header.Get("Authorization") != "Bearer "+runtimeToken {
+				http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+				return
+			}
+			if pollRequests.Add(1) != 1 {
+				_ = json.NewEncoder(w).Encode(map[string]any{"work": []any{}})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"work": []any{map[string]any{
+				"sessionId": sessionID, "projectId": "smoke-alpha", "projectName": "smoke-alpha",
+				"repository": repository, "requiresRepository": true, "ref": "main",
+				"workType": "development", "promptContext": "operator endpoint smoke",
+				"maxDurationSeconds": 60, "queuedAt": time.Now().UnixMilli(),
+				"resolvedProfile": map[string]any{
+					"provider":       "stub",
+					"providerConfig": map[string]any{"stub.behavior": "hang-then-timeout"},
+				},
+			}}})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/workers/"+workerID+"/heartbeat":
+			_ = json.NewEncoder(w).Encode(map[string]any{"acknowledged": true})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/lock-refresh"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "refreshed": true})
+		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/sessions/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(orchestrator.Close)
+
 	// daemon.yaml mirrors step4_af_agent_run_test.go's allowlist +
-	// orchestrator stub setup and adds the S4 kit.scanPaths block
+	// local orchestrator setup and adds the S4 kit.scanPaths block
 	// pointing at the kit dir above. LiveDaemonWithConfig writes this
 	// under <home>/.donmai/daemon.yaml before spawn — LoadConfig reads
 	// it BEFORE the wizard fallback in daemon.Start.
@@ -108,10 +162,11 @@ capacity:
     memoryMb: 1024
 projects:
   - id: smoke-alpha
-    repository: github.com/foo/rensei-smokes-alpha
+    repository: %q
     cloneStrategy: shallow
 orchestrator:
-  url: http://127.0.0.1:1
+  url: %q
+  authToken: %q
 autoUpdate:
   channel: stable
   schedule: manual
@@ -119,9 +174,9 @@ autoUpdate:
 kit:
   scanPaths:
     - %s
-`, kitDir)
+`, repository, orchestrator.URL, registrationToken, kitDir)
 
-	live, _, logBuf, _ := afh.LiveDaemonWithConfig(t, daemonYAML)
+	live, _, logBuf, _ := afh.LiveDaemonWithConfig(t, daemonYAML, "DONMAI_DAEMON_FORCE_STUB=0")
 
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 
@@ -194,56 +249,69 @@ kit:
 		t.Logf("S4 verified: GET /api/daemon/kits surfaced smoke-fake-kit from kit.scanPaths=%s", kitDir)
 	}
 
-	// ─── Inject a session via POST /api/daemon/sessions (S5/S6a setup) ──
+	// ─── Real poll / AcceptWorkWithDetail setup for S5 and S6a ────
 	//
-	// Same shape Phase 7d's step4 uses: minimal SessionSpec carrying
-	// repository="smoke-alpha" (matches the allowlist entry's id) +
-	// ref="main". WorkerSpawner.AcceptWork validates the allowlist,
-	// finds capacity, registers the session, and synchronously fires
-	// SessionEventStarted before returning the handle — which means by
-	// the time POST returns 202, the routing trace recording has already
-	// happened on the same goroutine.
-	sessionID := fmt.Sprintf("smoke-operator-endpoints-%d-%d",
-		live.Port(), time.Now().UnixMilli())
-	specBody := map[string]any{
-		"sessionId":  sessionID,
-		"repository": "smoke-alpha",
-		"ref":        "main",
+	// The child process requires the full SessionDetail that only the worker
+	// poll path supplies. Waiting for the detail endpoint to return 200 is the
+	// discriminating control: the former direct AcceptWork path returned 202,
+	// but the child then failed its detail preflight with 404.
+	{
+		var (
+			detailStatus int
+			detailBody   []byte
+		)
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			getCtx, getCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			req, err := http.NewRequestWithContext(getCtx, http.MethodGet,
+				live.URL+"/api/daemon/sessions/"+sessionID, nil)
+			if err != nil {
+				getCancel()
+				t.Fatalf("build session-detail request: %v", err)
+			}
+			resp, err := httpClient.Do(req)
+			if err != nil {
+				getCancel()
+				time.Sleep(50 * time.Millisecond)
+				continue
+			}
+			detailStatus = resp.StatusCode
+			detailBody, _ = io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			getCancel()
+			if detailStatus == http.StatusOK {
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		if detailStatus != http.StatusOK {
+			t.Fatalf("session detail %s never reached 200; last status=%d\n--- body ---\n%s\n--- daemon log tail ---\n%s",
+				sessionID, detailStatus, detailBody, logBuf.String())
+		}
+		var detail struct {
+			SessionID  string `json:"sessionId"`
+			ProjectID  string `json:"projectId"`
+			Repository string `json:"repository"`
+			Ref        string `json:"ref"`
+		}
+		if err := json.Unmarshal(detailBody, &detail); err != nil {
+			t.Fatalf("decode SessionDetail: %v\n--- body ---\n%s", err, detailBody)
+		}
+		if detail.SessionID != sessionID || detail.ProjectID != "smoke-alpha" ||
+			detail.Repository != repository || detail.Ref != "main" {
+			t.Errorf("SessionDetail = %+v, want session=%q project=smoke-alpha repository=%q ref=main",
+				detail, sessionID, repository)
+		}
+		t.Logf("real poll accepted session with durable detail: id=%s repository=%s", sessionID, repository)
 	}
-	specBytes, err := json.Marshal(specBody)
-	if err != nil {
-		t.Fatalf("marshal session spec: %v", err)
-	}
-
-	postCtx, postCancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer postCancel()
-	postReq, err := http.NewRequestWithContext(postCtx, http.MethodPost,
-		live.URL+"/api/daemon/sessions", bytes.NewReader(specBytes))
-	if err != nil {
-		t.Fatalf("build accept-work request: %v", err)
-	}
-	postReq.Header.Set("Content-Type", "application/json")
-
-	postResp, err := httpClient.Do(postReq)
-	if err != nil {
-		t.Fatalf("POST /api/daemon/sessions: %v\n--- daemon log tail ---\n%s",
-			err, logBuf.String())
-	}
-	postBody, _ := io.ReadAll(postResp.Body)
-	_ = postResp.Body.Close()
-	if postResp.StatusCode != http.StatusAccepted {
-		t.Fatalf("POST /api/daemon/sessions status = %d, want 202\n--- body ---\n%s\n--- daemon log tail ---\n%s",
-			postResp.StatusCode, postBody, logBuf.String())
-	}
-	t.Logf("session accepted: id=%s", sessionID)
 
 	// ─── S5: GET /api/daemon/workareas returns the live-pool entry ──────
 	//
 	// WorkerSpawner.ActiveWorkareas() is invoked from
 	// WorkareaArchiveRegistry's ActiveProvider hook, which the workareas
 	// handler uses to populate the response's Active[] slice. The
-	// projection is pull-based, so by the time the spawner has registered
-	// the session (the POST already returned 202) the entry is visible.
+	// projection is pull-based, so after the detail endpoint proves the
+	// spawner registered the polled session the entry is visible.
 	// Brief poll-loop to stay resilient against any future tweak that
 	// makes the registration order matter.
 	{
@@ -302,9 +370,9 @@ kit:
 				if w.Kind != "active" {
 					t.Errorf("workarea.Kind = %q, want active", w.Kind)
 				}
-				if w.Repository != "smoke-alpha" {
-					t.Errorf("workarea.Repository = %q, want smoke-alpha (allowlist id)",
-						w.Repository)
+				if w.Repository != repository {
+					t.Errorf("workarea.Repository = %q, want %q (polled repository resource)",
+						w.Repository, repository)
 				}
 				if w.Ref != "main" {
 					t.Errorf("workarea.Ref = %q, want main", w.Ref)
@@ -325,17 +393,17 @@ kit:
 			t.Fatalf("GET /api/daemon/workareas Active[] never contained session %q\n--- last body ---\n%s\n--- daemon log tail ---\n%s",
 				sessionID, workareasBody, logBuf.String())
 		}
-		t.Logf("S5 verified: GET /api/daemon/workareas Active[] contains session %s (repository=smoke-alpha ref=main)",
-			sessionID)
+		t.Logf("S5 verified: GET /api/daemon/workareas Active[] contains session %s (repository=%s ref=main)",
+			sessionID, repository)
 	}
 
 	// ─── S6a: GET /api/daemon/routing/explain/<sessionID> ────────────────
 	//
 	// The Wave 11 / S6a SessionEventStarted listener records the
 	// degenerate "always pick local" decision synchronously before
-	// AcceptWork returns the handle, so by POST return the recording is
-	// already visible. Brief poll for resilience (mirrors step4's
-	// pattern).
+	// AcceptWorkWithDetail returns the handle, so once SessionDetail is
+	// visible the recording is already available. Brief poll for resilience
+	// (mirrors step4's pattern).
 	{
 		explainURL := live.URL + "/api/daemon/routing/explain/" + sessionID
 		deadline := time.Now().Add(5 * time.Second)

@@ -98,6 +98,7 @@ func LiveDaemonWithConfig(t *testing.T, daemonYAML string, extraEnv ...string) (
 		"PATH=/usr/bin:/bin:/usr/sbin:/sbin",
 		"HOME=" + home,
 		"XDG_CONFIG_HOME=" + filepath.Join(home, ".config"),
+		"DONMAI_DAEMON_URL=" + url,
 		"DONMAI_DAEMON_FORCE_STUB=1",
 		"DONMAI_STATE_HOME=" + home,
 		"NO_COLOR=1",
