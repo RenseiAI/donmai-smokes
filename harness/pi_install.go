@@ -15,9 +15,10 @@ package harness
 //
 //  1. $DONMAI_SMOKES_PI_BIN, if set, is used verbatim (operator/CI escape
 //     hatch — a runner image that pre-bakes its own copy).
-//  2. A `pi` already on $PATH reporting the pinned version (or newer) is
+//  2. A `pi` already on $PATH reporting exactly the pinned version is
 //     reused, avoiding a redundant install on a developer machine or
-//     pre-provisioned runner.
+//     pre-provisioned runner. Newer versions are not assumed protocol-
+//     compatible with the pinned harness contract.
 //  3. Otherwise `npm install -g --prefix <isolated dir>
 //     @earendil-works/pi-coding-agent@<pin>` installs an isolated copy —
 //     NEVER the operator's/runner's real global npm prefix — and returns
@@ -34,7 +35,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -87,14 +87,14 @@ func EnsurePiBinary(t *testing.T) string {
 	}
 
 	if path, err := exec.LookPath("pi"); err == nil {
-		if v, ok := probePiVersion(path); ok && comparePiDottedVersions(v, pin) >= 0 {
+		if v, ok := probePiVersion(path); ok && v == pin {
 			return path
 		}
 	}
 
 	npmPath, err := exec.LookPath("npm")
 	if err != nil {
-		t.Skip("pi not on PATH (matching or exceeding the pin) and npm not available " +
+		t.Skip("pi not on PATH at the exact pin and npm not available " +
 			"— skipping pi harness smoke")
 	}
 
@@ -140,34 +140,4 @@ func probePiVersion(binary string) (string, bool) {
 	}
 	m := piVersionRe.FindString(strings.TrimSpace(string(out)))
 	return m, m != ""
-}
-
-// comparePiDottedVersions compares two dotted-integer version strings
-// (e.g. "0.80.10") component-wise. Returns -1/0/1. Lenient: missing or
-// non-numeric components compare as 0 — this is an advisory comparison for
-// "is $PATH's pi good enough to skip installing", not a strict semver
-// library.
-func comparePiDottedVersions(a, b string) int {
-	as := strings.Split(a, ".")
-	bs := strings.Split(b, ".")
-	n := len(as)
-	if len(bs) > n {
-		n = len(bs)
-	}
-	for i := 0; i < n; i++ {
-		var av, bv int
-		if i < len(as) {
-			av, _ = strconv.Atoi(as[i])
-		}
-		if i < len(bs) {
-			bv, _ = strconv.Atoi(bs[i])
-		}
-		if av != bv {
-			if av < bv {
-				return -1
-			}
-			return 1
-		}
-	}
-	return 0
 }

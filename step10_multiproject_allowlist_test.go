@@ -24,7 +24,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"slices"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -34,8 +37,72 @@ import (
 func TestExplicitProjectAdmissionRouting(t *testing.T) {
 	afh.SkipIfShort(t, "end-to-end live-daemon test")
 	afh.SkipIfKnob(t, afh.SkipLiveDaemonEnv, "operator opted out of the live-daemon smoke")
+	afh.SkipIfToolMissing(t, "git", "the repository-backed poll item clones a local bare fixture")
 
-	const daemonYAML = `apiVersion: donmai.dev/v1
+	alphaRepository := "file://" + afh.MakeBareFixtureRepo(t, "project-admission-alpha")
+	ts := time.Now().UnixNano()
+	sessionAlpha := fmt.Sprintf("smoke-admission-alpha-%d", ts)
+	sessionBeta := fmt.Sprintf("smoke-admission-beta-%d", ts+1)
+
+	const (
+		workerID     = "worker-smoke-project-admission"
+		runtimeToken = "smoke.runtime.token"
+	)
+	registrationToken := "rs" + "k_live_smoke_project_admission" //nolint:gosec // synthetic httptest credential
+	var pollRequests atomic.Int32
+	orchestrator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/workers/register":
+			if r.Header.Get("Authorization") != "Bearer "+registrationToken {
+				http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"workerId": workerID, "runtimeToken": runtimeToken,
+				"heartbeatInterval": 30000, "pollInterval": 1000,
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/workers/"+workerID+"/poll":
+			if r.Header.Get("Authorization") != "Bearer "+runtimeToken {
+				http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+				return
+			}
+			if pollRequests.Add(1) != 1 {
+				_ = json.NewEncoder(w).Encode(map[string]any{"work": []any{}})
+				return
+			}
+			profile := map[string]any{
+				"provider":       "stub",
+				"providerConfig": map[string]any{"stub.behavior": "hang-then-timeout"},
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"work": []any{
+				map[string]any{
+					"sessionId": sessionAlpha, "projectId": "smoke-alpha",
+					"projectName": "smoke-alpha", "repositoryId": "alpha-primary",
+					"repository": alphaRepository, "requiresRepository": true,
+					"ref": "main", "workType": "development", "maxDurationSeconds": 60,
+					"promptContext": "project admission smoke", "queuedAt": ts, "resolvedProfile": profile,
+				},
+				map[string]any{
+					"sessionId": sessionBeta, "projectId": "smoke-beta",
+					"projectName": "smoke-beta", "ref": "main",
+					"workType": "development", "maxDurationSeconds": 60,
+					"promptContext": "project admission smoke", "queuedAt": ts + 1, "resolvedProfile": profile,
+				},
+			}})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/workers/"+workerID+"/heartbeat":
+			_ = json.NewEncoder(w).Encode(map[string]any{"acknowledged": true})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/lock-refresh"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "refreshed": true})
+		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/sessions/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(orchestrator.Close)
+
+	daemonYAML := fmt.Sprintf(`apiVersion: donmai.dev/v1
 kind: LocalDaemon
 projectAdmissionVersion: 2
 enabledProjectIds:
@@ -53,7 +120,7 @@ capacity:
 repositories:
   - id: alpha-primary
     projectId: smoke-alpha
-    source: github.com/example/alpha-app
+    source: %q
     primary: true
     cloneStrategy: shallow
   - id: alpha-docs
@@ -66,14 +133,15 @@ repositories:
     primary: true
     cloneStrategy: shallow
 orchestrator:
-  url: http://127.0.0.1:1
+  url: %q
+  authToken: %q
 autoUpdate:
   channel: stable
   schedule: manual
   drainTimeoutSeconds: 5
-`
+`, alphaRepository, orchestrator.URL, registrationToken)
 
-	live, _, logBuf, _ := afh.LiveDaemonWithConfig(t, daemonYAML)
+	live, _, logBuf, _ := afh.LiveDaemonWithConfig(t, daemonYAML, "DONMAI_DAEMON_FORCE_STUB=0")
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 
 	t.Run("stats_separates_admission_from_repositories", func(t *testing.T) {
@@ -114,7 +182,7 @@ autoUpdate:
 			t.Errorf("AppliedProjectIDs = %v, want %v", statsResp.AppliedProjectIDs, wantEnabled)
 		}
 		wantRepositories := []string{
-			"github.com/example/alpha-app",
+			alphaRepository,
 			"github.com/example/alpha-docs",
 			"github.com/example/gamma-app",
 		}
@@ -124,10 +192,6 @@ autoUpdate:
 		t.Logf("v2 admission=%v applied=%v repositories=%v",
 			statsResp.EnabledProjectIDs, statsResp.AppliedProjectIDs, statsResp.AllowedProjects)
 	})
-
-	ts := time.Now().UnixMilli()
-	sessionAlpha := fmt.Sprintf("smoke-admission-alpha-%d-%d", live.Port(), ts)
-	sessionBeta := fmt.Sprintf("smoke-admission-beta-%d-%d", live.Port(), ts+1)
 
 	postSession := func(t *testing.T, specBody map[string]any, wantStatus int) []byte {
 		t.Helper()
@@ -156,42 +220,60 @@ autoUpdate:
 		return body
 	}
 
-	assertAccepted := func(t *testing.T, body []byte, wantSessionID string) {
+	assertPolledSession := func(t *testing.T, sessionID, wantProjectID, wantRepository string) {
 		t.Helper()
-		var handle struct {
-			SessionID  string `json:"sessionId"`
-			AcceptedAt string `json:"acceptedAt"`
+		var (
+			status int
+			body   []byte
+			detail struct {
+				SessionID  string `json:"sessionId"`
+				ProjectID  string `json:"projectId"`
+				Repository string `json:"repository"`
+			}
+		)
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+				live.URL+"/api/daemon/sessions/"+sessionID, nil)
+			if err != nil {
+				cancel()
+				t.Fatalf("build session-detail request: %v", err)
+			}
+			resp, err := httpClient.Do(req)
+			if err != nil {
+				cancel()
+				time.Sleep(50 * time.Millisecond)
+				continue
+			}
+			status = resp.StatusCode
+			body, _ = io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			cancel()
+			if status == http.StatusOK {
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
 		}
-		if err := json.Unmarshal(body, &handle); err != nil {
-			t.Fatalf("decode SessionHandle: %v\n--- body ---\n%s", err, body)
+		if status != http.StatusOK {
+			t.Fatalf("session detail %s never reached 200; last status=%d\n--- body ---\n%s\n--- daemon log tail ---\n%s",
+				sessionID, status, body, logBuf.String())
 		}
-		if handle.SessionID != wantSessionID {
-			t.Errorf("SessionHandle.SessionID = %q, want %q", handle.SessionID, wantSessionID)
+		if err := json.Unmarshal(body, &detail); err != nil {
+			t.Fatalf("decode SessionDetail: %v\n--- body ---\n%s", err, body)
 		}
-		if handle.AcceptedAt == "" {
-			t.Error("SessionHandle.AcceptedAt empty, want RFC3339 timestamp")
+		if detail.SessionID != sessionID || detail.ProjectID != wantProjectID || detail.Repository != wantRepository {
+			t.Errorf("SessionDetail = %+v, want session=%q project=%q repository=%q",
+				detail, sessionID, wantProjectID, wantRepository)
 		}
 	}
 
 	t.Run("enabled_project_with_repository_accepted", func(t *testing.T) {
-		body := postSession(t, map[string]any{
-			"sessionId":          sessionAlpha,
-			"projectId":          "smoke-alpha",
-			"repositoryId":       "alpha-primary",
-			"repository":         "github.com/example/alpha-app",
-			"requiresRepository": true,
-			"ref":                "main",
-		}, http.StatusAccepted)
-		assertAccepted(t, body, sessionAlpha)
+		assertPolledSession(t, sessionAlpha, "smoke-alpha", alphaRepository)
 	})
 
 	t.Run("enabled_project_without_repository_accepted", func(t *testing.T) {
-		body := postSession(t, map[string]any{
-			"sessionId": sessionBeta,
-			"projectId": "smoke-beta",
-			"ref":       "main",
-		}, http.StatusAccepted)
-		assertAccepted(t, body, sessionBeta)
+		assertPolledSession(t, sessionBeta, "smoke-beta", "")
 	})
 
 	t.Run("repository_does_not_enable_project", func(t *testing.T) {
@@ -224,7 +306,7 @@ autoUpdate:
 			foundBeta  bool
 			lastBody   []byte
 		)
-		deadline := time.Now().Add(5 * time.Second)
+		deadline := time.Now().Add(10 * time.Second)
 		for time.Now().Before(deadline) {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, live.URL+"/api/daemon/workareas", nil)
@@ -255,7 +337,7 @@ autoUpdate:
 				switch workarea.SessionID {
 				case sessionAlpha:
 					foundAlpha = true
-					if workarea.ProjectID != "smoke-alpha" || workarea.Repository != "github.com/example/alpha-app" {
+					if workarea.ProjectID != "smoke-alpha" || workarea.Repository != alphaRepository {
 						t.Errorf("alpha workarea = %+v, want project and repository resource", workarea)
 					}
 				case sessionBeta:
