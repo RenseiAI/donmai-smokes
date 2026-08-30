@@ -61,7 +61,20 @@ func TestA2AV1CLIEndToEnd(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	binary, _ := afh.RequireDonmaiBinary(t, afh.LiveBinaryOptions{Timeout: 3 * time.Minute})
+	requestedSource := inFlightSourceDir()
+	binary, sourceDir := afh.RequireDonmaiBinary(t, afh.LiveBinaryOptions{
+		SourceDir: requestedSource,
+		Timeout:   3 * time.Minute,
+	})
+	if requestedSource != "" {
+		requestedAbsolute, err := filepath.Abs(requestedSource)
+		if err != nil {
+			t.Fatalf("resolve requested in-flight source: %v", err)
+		}
+		if sourceDir != requestedAbsolute {
+			t.Fatalf("built source = %q, want exact in-flight source %q", sourceDir, requestedAbsolute)
+		}
+	}
 	tokenFile := filepath.Join(t.TempDir(), "token")
 	if err := os.WriteFile(tokenFile, []byte("smoke-token\n"), 0o600); err != nil {
 		t.Fatalf("write token fixture: %v", err)
