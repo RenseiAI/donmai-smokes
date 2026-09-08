@@ -1,11 +1,9 @@
 package smokes
 
 // step22_receipt_interactive_spawn_test.go — receipt-bearing interactive spawn
-// smoke. Closes the SMOKE-GAP flagged in donmai #482/#485 reviews: no coverage
-// for a poll item carrying the execution-cell sidecars
-// (admissionReceipt/claimReceipt/effectiveCell) alongside the sibling
-// resolvedProfile, and the repositoryDeclaration variant once donmai #485
-// merges.
+// smoke. Closes the receipt-consumer gap for a poll item carrying the
+// execution-cell sidecars (admissionReceipt/claimReceipt/effectiveCell)
+// alongside the sibling resolvedProfile and a repositoryDeclaration.
 //
 // What this lane proves, platform-free (OSS local daemon API only, no
 // platform orchestration or work-auth tokens):
@@ -16,13 +14,12 @@ package smokes
 //  2. The subsequent spawn reapplies the SAME authority without drift.
 //  3. A genuine authority difference is refused and names the drifting
 //     field digests (never raw values).
-//  4. The repositoryDeclaration variant lands after donmai #485
-//     (runner/repository_sandbox_reconcile.go) — gated so this lane stays
-//     green before #485 and proves the fix after it.
+//  4. The repositoryDeclaration variant is applied through the immutable
+//     released module, including its repository authority sandbox.
 //
-// Pin: donmai behaviour is pinned to current origin/main. The
-// repositoryDeclaration subtest notes in its skip message that it lands
-// after #485.
+// Pin: imported donmai behavior is pinned to the immutable released module in
+// go.mod. The separately built sibling binary is only the live-smoke liveness
+// control and is not treated as authority for the imported consumer.
 
 import (
 	"context"
@@ -30,49 +27,54 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/RenseiAI/donmai/agent"
+	"github.com/RenseiAI/donmai/attachwire"
 	"github.com/RenseiAI/donmai/daemon"
 	"github.com/RenseiAI/donmai/executioncell"
 	"github.com/RenseiAI/donmai/prompt"
 	"github.com/RenseiAI/donmai/provider/harness/codex"
+	"github.com/RenseiAI/donmai/result"
 	"github.com/RenseiAI/donmai/runner"
 	"github.com/RenseiAI/donmai/runtime/workarea"
+	"github.com/RenseiAI/donmai/runtime/worktree"
 
 	afh "github.com/RenseiAI/donmai-smokes/harness"
 )
 
-// receiptInteractiveSpawnCapabilityFiles probes the checkout under test for
-// the execution-cell seam this lane pins.
-var receiptInteractiveSpawnCapabilityFiles = []string{
-	filepath.Join("executioncell", "types.go"),
-	filepath.Join("executioncell", "runtime_binding.go"),
-	filepath.Join("daemon", "execution_preflight_store.go"),
-	filepath.Join("runner", "harness_selection.go"),
-	filepath.Join("runner", "prepared_harness.go"),
-	filepath.Join("agent", "prepared_harness.go"),
-}
+const receiptInteractiveSpawnDonmaiVersion = "v0.72.24"
 
-func requireReceiptInteractiveSpawnSource(t *testing.T) string {
+// requireReceiptInteractiveSpawnModule binds the capability check to the
+// library code this test process actually imported. A mutable sibling checkout
+// may be newer or older and is therefore unsuitable as a library capability
+// probe.
+func requireReceiptInteractiveSpawnModule(t *testing.T) {
 	t.Helper()
-	srcDir := afh.RequireDonmaiSourceAt(t, inFlightSourceDir())
-	for _, rel := range receiptInteractiveSpawnCapabilityFiles {
-		if _, err := os.Stat(filepath.Join(srcDir, rel)); err != nil {
-			afh.DeclineLive(t, "donmai checkout at %q predates %s", srcDir, rel)
-		}
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		t.Fatal("runtime build info unavailable; cannot prove imported Donmai module identity")
 	}
-	return srcDir
-}
-
-func hasRepositorySandboxReconcile(srcDir string) bool {
-	_, err := os.Stat(filepath.Join(srcDir, "runner", "repository_sandbox_reconcile.go"))
-	return err == nil
+	for _, dependency := range info.Deps {
+		if dependency.Path != "github.com/RenseiAI/donmai" {
+			continue
+		}
+		if dependency.Version != receiptInteractiveSpawnDonmaiVersion || dependency.Replace != nil {
+			t.Fatalf("imported Donmai module = version %q replace %#v, want immutable %s with no replacement", dependency.Version, dependency.Replace, receiptInteractiveSpawnDonmaiVersion)
+		}
+		return
+	}
+	t.Fatal("runtime build info does not contain github.com/RenseiAI/donmai")
 }
 
 // codexReceiptCell builds a ResolvedExecutionCell pinned to the codex
@@ -165,6 +167,8 @@ type receiptInteractiveFakeProvider struct {
 	harness    agent.HarnessName
 	spawnCalls atomic.Int32
 	manifest   agent.HarnessManifest
+	mu         sync.Mutex
+	spawnSpec  agent.Spec
 }
 
 func (p *receiptInteractiveFakeProvider) Name() agent.ProviderName { return p.name }
@@ -172,15 +176,87 @@ func (p *receiptInteractiveFakeProvider) Capabilities() agent.Capabilities {
 	return agent.Capabilities{}
 }
 func (p *receiptInteractiveFakeProvider) Manifest() agent.HarnessManifest { return p.manifest }
-func (p *receiptInteractiveFakeProvider) Spawn(_ context.Context, _ agent.Spec) (agent.Handle, error) {
+func (p *receiptInteractiveFakeProvider) Spawn(_ context.Context, spec agent.Spec) (agent.Handle, error) {
+	applied, err := agent.PrepareHarness(spec, p.manifest)
+	if err != nil {
+		return nil, fmt.Errorf("apply prepared harness: %w", err)
+	}
+	p.mu.Lock()
+	p.spawnSpec = applied
+	p.mu.Unlock()
 	p.spawnCalls.Add(1)
-	return nil, errors.New("receipt-interactive fake must not spawn")
+	events := make(chan agent.Event, 2)
+	events <- agent.InitEvent{SessionID: "receipt-interactive-fake-process"}
+	events <- agent.ResultEvent{Success: true, Message: "controlled fake process completed"}
+	close(events)
+	done := make(chan struct{})
+	close(done)
+	return &receiptInteractiveFakeHandle{
+		events:  events,
+		session: &receiptInteractiveFakeSession{done: done},
+	}, nil
 }
 
 func (p *receiptInteractiveFakeProvider) Resume(_ context.Context, _ string, _ agent.Spec) (agent.Handle, error) {
 	return nil, errors.New("receipt-interactive fake must not resume")
 }
 func (p *receiptInteractiveFakeProvider) Shutdown(_ context.Context) error { return nil }
+
+func (p *receiptInteractiveFakeProvider) spawnedSpec() agent.Spec {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.spawnSpec
+}
+
+type receiptInteractiveFakeHandle struct {
+	events  <-chan agent.Event
+	session agent.InteractiveSession
+}
+
+func (*receiptInteractiveFakeHandle) SessionID() string { return "receipt-interactive-fake-process" }
+
+func (h *receiptInteractiveFakeHandle) Events() <-chan agent.Event {
+	return h.events
+}
+func (*receiptInteractiveFakeHandle) Inject(context.Context, string) error { return nil }
+func (*receiptInteractiveFakeHandle) Stop(context.Context) error           { return nil }
+func (h *receiptInteractiveFakeHandle) InteractiveSession() agent.InteractiveSession {
+	return h.session
+}
+
+type receiptInteractiveFakeSession struct {
+	done <-chan struct{}
+}
+
+func (*receiptInteractiveFakeSession) WriteInput(p []byte) (int, error) { return len(p), nil }
+func (*receiptInteractiveFakeSession) Resize(uint32, uint32, uint32, uint32) error {
+	return nil
+}
+
+func (*receiptInteractiveFakeSession) Snapshot() (attachwire.Screen, attachwire.HostSeq, error) {
+	return attachwire.Screen{}, 0, nil
+}
+
+func (*receiptInteractiveFakeSession) EmitSnapshot() (attachwire.Frame, bool, error) {
+	return attachwire.Frame{}, false, nil
+}
+func (*receiptInteractiveFakeSession) EmitMarker(string) error { return nil }
+func (*receiptInteractiveFakeSession) Subscribe(attachwire.HostSeq) (agent.InteractiveSubscription, error) {
+	frames := make(chan attachwire.Frame)
+	close(frames)
+	return &receiptInteractiveFakeSubscription{frames: frames}, nil
+}
+func (s *receiptInteractiveFakeSession) Done() <-chan struct{} { return s.done }
+func (*receiptInteractiveFakeSession) Exit() (attachwire.ExitPayload, bool) {
+	return attachwire.NewNormalExit(0), true
+}
+
+type receiptInteractiveFakeSubscription struct {
+	frames <-chan attachwire.Frame
+}
+
+func (s *receiptInteractiveFakeSubscription) Frames() <-chan attachwire.Frame { return s.frames }
+func (*receiptInteractiveFakeSubscription) Close() error                      { return nil }
 
 func newReceiptInteractiveProvider() *receiptInteractiveFakeProvider {
 	m := (&codex.Provider{}).Manifest()
@@ -194,6 +270,75 @@ func receiptInteractiveRegistry(t *testing.T, p *receiptInteractiveFakeProvider)
 		t.Fatalf("register %q: %v", p.name, err)
 	}
 	return reg
+}
+
+func receiptInteractiveLocalRepository(t *testing.T) string {
+	t.Helper()
+	source := t.TempDir()
+	runReceiptInteractiveGit(t, source, "init", "--initial-branch=main")
+	runReceiptInteractiveGit(t, source, "config", "user.name", "Receipt Smoke")
+	runReceiptInteractiveGit(t, source, "config", "user.email", "receipt-smoke@example.invalid")
+	if err := os.WriteFile(filepath.Join(source, "README.md"), []byte("controlled receipt smoke\n"), 0o600); err != nil {
+		t.Fatalf("write controlled repository: %v", err)
+	}
+	runReceiptInteractiveGit(t, source, "add", "README.md")
+	runReceiptInteractiveGit(t, source, "commit", "-m", "seed controlled receipt smoke")
+
+	bare := filepath.Join(t.TempDir(), "repository.git")
+	runReceiptInteractiveGit(t, "", "clone", "--bare", source, bare)
+	return bare
+}
+
+func runReceiptInteractiveGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	//nolint:gosec // G204: test helper receives only fixed fixture arguments from this file.
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+	}
+}
+
+func receiptInteractiveRunner(t *testing.T, reg *runner.Registry) (*runner.Runner, string) {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "refreshed": true})
+	}))
+	t.Cleanup(server.Close)
+	manager, err := worktree.NewManager(worktree.Options{ParentDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("create controlled worktree manager: %v", err)
+	}
+	poster, err := result.NewPoster(result.Options{
+		PlatformURL: server.URL,
+		WorkerID:    "receipt-smoke-worker",
+		AuthToken:   "controlled-test-token",
+		HTTPClient:  server.Client(),
+		BaseDelay:   1,
+	})
+	if err != nil {
+		t.Fatalf("create controlled result poster: %v", err)
+	}
+	run, err := runner.New(runner.Options{
+		Registry:               reg,
+		WorktreeManager:        manager,
+		Poster:                 poster,
+		HTTPClient:             server.Client(),
+		MaxSessionDuration:     10 * time.Second,
+		IdleTimeout:            -1,
+		HeartbeatInterval:      time.Hour,
+		SkipBackstop:           true,
+		SkipSteering:           true,
+		SkipPostSession:        true,
+		PreserveWorktreeAlways: false,
+	})
+	if err != nil {
+		t.Fatalf("create controlled runner: %v", err)
+	}
+	return run, server.URL
 }
 
 func daemonForReceiptInteractiveSmoke(t *testing.T, reg *runner.Registry, store daemon.ExecutionPreflightStore, repoURL string) *daemon.Daemon {
@@ -228,44 +373,35 @@ orchestrator:
 	return d
 }
 
-// buildReadyHostReceipt synthesizes a host adaptation receipt that will
-// pass daemon validation for the given QW. Used for pure-runner
-// PreflightHarness checks where the daemon path is not exercised.
-func buildReadyHostReceipt(t *testing.T, qw runner.QueuedWork) json.RawMessage {
+// buildReadyHostReceipt drives the released host compiler over the same wire
+// siblings the daemon supplies. This keeps the persisted authority independent
+// from the child runner while avoiding a hand-written copy of compiler logic.
+func buildReadyHostReceipt(t *testing.T, reg *runner.Registry, qw runner.QueuedWork) json.RawMessage {
 	t.Helper()
-	admission, err := executioncell.DecodeAdmissionReceipt(qw.AdmissionReceipt)
+	detail := map[string]any{
+		"sessionId":               qw.SessionID,
+		"workerId":                qw.WorkerID,
+		"admissionReceipt":        qw.AdmissionReceipt,
+		"effectiveCell":           qw.EffectiveCell,
+		"executionRuntimeBinding": qw.ExecutionRuntimeBinding,
+		"operationalPayload":      qw.OperationalPayload,
+		"resolvedProfile":         qw.ResolvedProfile,
+	}
+	if len(qw.ClaimReceipt) > 0 {
+		detail["claimReceipt"] = qw.ClaimReceipt
+	}
+	raw, err := json.Marshal(detail)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("marshal host preflight detail: %v", err)
 	}
-	binding, err := executioncell.DecodeRuntimeBinding(qw.ExecutionRuntimeBinding)
+	receipt, err := runner.NewProviderView(reg).PreflightExecution(raw)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("compile host adaptation receipt: %v\n%s", err, receipt)
 	}
-	promptReceipt := agent.PromptDeliveryReceipt{ContractVersion: agent.PromptContractVersion, ProfileID: "test-prompt", Decision: "ready", Entries: []agent.PromptDeliveryEntry{}}
-	toolReceipt := agent.ToolLifecycleReceipt{
-		ContractVersion: agent.ToolLifecycleContractVersion, AdmissionReceiptID: admission.Value().ReceiptID,
-		ClaimReceiptID: "", OperationalPayloadDigest: admission.Value().OperationalPayloadDigest,
-		ProfileID: "test-tools", Decision: "ready", EvidenceTier: string(agent.EvidenceStructured), ProductionEligible: true, Entries: []agent.ToolLifecycleEntry{},
+	if _, err := executioncell.DecodeHostAdaptationReceipt(receipt); err != nil {
+		t.Fatalf("compiled host receipt invalid: %v", err)
 	}
-	plan := &agent.PreparedHarness{
-		ContractVersion: agent.HarnessAdaptationContractVersion, Harness: admission.Value().Cell.Harness.ID,
-		Mode: agent.PromptModeHumanControlled, OperationalPayloadDigest: admission.Value().OperationalPayloadDigest, AuthorityDigest: "test-authority",
-		PromptReceipt: promptReceipt, ToolLifecycleReceipt: toolReceipt,
-	}
-	for _, channel := range []string{"worktree", "environment", "credentials", "config", "endpoint_delivery", "services", "child_process", "runtime", "cleanup"} {
-		plan.Materializations = append(plan.Materializations, agent.HarnessMaterialization{Channel: channel, SourceDigest: admission.Value().OperationalPayloadDigest, Required: true})
-	}
-	host := map[string]any{
-		"contractVersion": executioncell.HostAdaptationContractVersion, "requestId": binding.RequestID,
-		"workerId": binding.WorkerID, "placementId": binding.PlacementID, "decision": "ready",
-		"plan": plan, "planDigest": agent.DigestPreparedHarness(plan),
-		"promptReceipt": promptReceipt, "toolLifecycleReceipt": toolReceipt,
-	}
-	raw, _ := json.Marshal(host)
-	if _, err := executioncell.DecodeHostAdaptationReceipt(raw); err != nil {
-		t.Fatalf("synthetic host receipt invalid: %v", err)
-	}
-	return raw
+	return receipt
 }
 
 // TestReceiptInteractiveSpawn is the receipt-bearing interactive spawn
@@ -275,7 +411,8 @@ func TestReceiptInteractiveSpawn(t *testing.T) {
 	afh.SkipIfKnob(t, afh.SkipLiveDaemonEnv, "operator opted out of live-process smokes")
 	afh.SkipIfToolMissing(t, "git", "fixture repo helper is not tested here but git is the repo seam")
 
-	srcDir := requireReceiptInteractiveSpawnSource(t)
+	requireReceiptInteractiveSpawnModule(t)
+	srcDir := afh.RequireDonmaiSourceAt(t, inFlightSourceDir())
 	_, _ = afh.RequireDonmaiBinary(t, afh.LiveBinaryOptions{SourceDir: srcDir})
 
 	const model = "gpt-receipt-interactive-model"
@@ -390,13 +527,27 @@ func TestReceiptInteractiveSpawn(t *testing.T) {
 	})
 
 	t.Run("SpawnAppliesWithoutAuthorityDrift", func(t *testing.T) {
+		t.Setenv("ATTACH_URL", "")
+		t.Setenv("ATTACH_TOKEN", "")
 		provider := newReceiptInteractiveProvider()
 		reg := receiptInteractiveRegistry(t, provider)
+		run, platformURL := receiptInteractiveRunner(t, reg)
+		localRepository := receiptInteractiveLocalRepository(t)
 		sessionID := fmt.Sprintf("receipt-interactive-spawn-%d", time.Now().UnixNano())
-		qw := receiptInteractiveBaseQW(sessionID, repoURL, model)
+		qw := receiptInteractiveBaseQW(sessionID, localRepository, model)
+		qw.Body = "prove the controlled receipt-bearing interactive spawn"
+		qw.PlatformURL = platformURL
+		qw.AuthToken = "controlled-test-token"
+		qw.RepositoryDeclaration = &workarea.RepositoryDeclarationV1{
+			Protocol: workarea.ProtocolSessionRootV1,
+			Repositories: []workarea.DeclaredRepositoryV1{{
+				Source: workarea.RepositorySource{Repository: localRepository},
+				Name:   "primary", Role: workarea.RepositoryRolePrimary, Authority: workarea.RepositoryMutable,
+			}},
+		}
 		cell := codexReceiptCell("harness/v2", model, executioncell.SessionHumanControlled, nil)
 		qw = attachInteractiveAdmittedCell(t, qw, cell)
-		qw.HostAdaptationReceipt = buildReadyHostReceipt(t, qw)
+		qw.HostAdaptationReceipt = buildReadyHostReceipt(t, reg, qw)
 
 		admission, err := reg.PreflightHarness(qw)
 		if err != nil {
@@ -405,18 +556,46 @@ func TestReceiptInteractiveSpawn(t *testing.T) {
 		if admission == nil {
 			t.Fatal("PreflightHarness returned nil admission")
 		}
-		admission2, err := reg.PreflightHarness(qw)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		result, err := run.RunAdmitted(ctx, qw, admission)
 		if err != nil {
-			t.Fatalf("second PreflightHarness: %v", err)
+			t.Fatalf("RunAdmitted: %v", err)
 		}
-		if admission2 == nil {
-			t.Fatal("second PreflightHarness nil")
+		if result.Status != "completed" {
+			t.Fatalf("RunAdmitted status = %q, failureMode=%q error=%q", result.Status, result.FailureMode, result.Error)
 		}
-		if provider.spawnCalls.Load() != 0 {
-			t.Fatalf("provider spawned during preflight: %d", provider.spawnCalls.Load())
+		if provider.spawnCalls.Load() != 1 {
+			t.Fatalf("provider spawn calls = %d, want 1", provider.spawnCalls.Load())
 		}
-		_ = admission
-		_ = admission2
+		applied := provider.spawnedSpec()
+		if applied.PreparedHarness == nil {
+			t.Fatal("provider spawn received no prepared harness authority")
+		}
+		host, err := executioncell.DecodeHostAdaptationReceipt(qw.HostAdaptationReceipt)
+		if err != nil {
+			t.Fatalf("decode consumed host adaptation receipt: %v", err)
+		}
+		if got := agent.DigestPreparedHarness(applied.PreparedHarness); got != host.PlanDigest {
+			t.Fatalf("spawn applied plan digest = %q, want host authority %q", got, host.PlanDigest)
+		}
+		authority := applied.RepositoryAuthority
+		if authority == nil {
+			t.Fatal("spawn applied no repository authority")
+		}
+		if applied.Cwd != result.WorktreePath || authority.Protocol != string(workarea.ProtocolSessionRootV1) ||
+			authority.WorkareaRoot != result.WorkareaRoot || authority.SelectedPath != result.WorktreePath ||
+			len(authority.MutablePaths) != 1 || authority.MutablePaths[0] != result.WorktreePath || len(authority.ReadOnlyPaths) != 0 ||
+			authority.Enforcement != string(workarea.RepositoryAuthorityIsolatedReadOnlyV1) ||
+			!applied.SandboxEnabled || applied.SandboxLevel != agent.SandboxWorkspaceWrite {
+			t.Fatalf("spawn applied repository authority = %#v cwd=%q result=%#v sandbox=%t/%q", authority, applied.Cwd, result, applied.SandboxEnabled, applied.SandboxLevel)
+		}
+		if _, reuseErr := run.RunAdmitted(ctx, qw, admission); reuseErr == nil || !strings.Contains(reuseErr.Error(), "already consumed") {
+			t.Fatalf("second RunAdmitted error = %v, want already-consumed refusal", reuseErr)
+		}
+		if provider.spawnCalls.Load() != 1 {
+			t.Fatalf("provider spawn calls after admission reuse = %d, want 1", provider.spawnCalls.Load())
+		}
 	})
 
 	t.Run("GenuineAuthorityDriftIsRefusedNamingFields", func(t *testing.T) {
@@ -426,7 +605,7 @@ func TestReceiptInteractiveSpawn(t *testing.T) {
 		qw := receiptInteractiveBaseQW(sessionID, repoURL, model)
 		cell := codexReceiptCell("harness/v2", model, executioncell.SessionHumanControlled, nil)
 		qw = attachInteractiveAdmittedCell(t, qw, cell)
-		qw.HostAdaptationReceipt = buildReadyHostReceipt(t, qw)
+		qw.HostAdaptationReceipt = buildReadyHostReceipt(t, reg, qw)
 
 		qwDrift := qw
 		qwDrift.ResolvedProfile.Model = "different-model-swapped-after-preflight"
@@ -447,49 +626,6 @@ func TestReceiptInteractiveSpawn(t *testing.T) {
 		}
 		if provider.spawnCalls.Load() != 0 {
 			t.Fatalf("provider spawned on drifted preflight: %d", provider.spawnCalls.Load())
-		}
-	})
-
-	t.Run("RepositoryDeclarationVariant", func(t *testing.T) {
-		if !hasRepositorySandboxReconcile(srcDir) {
-			t.Skip("repositoryDeclaration variant lands after donmai #485 (runner/repository_sandbox_reconcile.go not present at this checkout)")
-		}
-		provider := newReceiptInteractiveProvider()
-		reg := receiptInteractiveRegistry(t, provider)
-		sessionID := fmt.Sprintf("receipt-interactive-repo-%d", time.Now().UnixNano())
-		qw := receiptInteractiveBaseQW(sessionID, repoURL, model)
-		qw.PermissionProfile = runner.PermissionProfileAutonomous
-		qw.RepositoryDeclaration = &workarea.RepositoryDeclarationV1{
-			Protocol: workarea.ProtocolSessionRootV1,
-			Repositories: []workarea.DeclaredRepositoryV1{{
-				Source: workarea.RepositorySource{Repository: repoURL}, Name: "primary",
-				Role: workarea.RepositoryRolePrimary, Authority: workarea.RepositoryMutable,
-			}},
-		}
-		cell := codexReceiptCell("harness/v2", model, executioncell.SessionHumanControlled, nil)
-		qw = attachInteractiveAdmittedCell(t, qw, cell)
-		qw.HostAdaptationReceipt = buildReadyHostReceipt(t, qw)
-
-		admission, err := reg.PreflightHarness(qw)
-		if err != nil {
-			t.Fatalf("PreflightHarness with declared repository: %v", err)
-		}
-		if admission == nil {
-			t.Fatal("nil admission for declared-repository interactive session")
-		}
-		admission2, err := reg.PreflightHarness(qw)
-		if err != nil {
-			t.Fatalf("second PreflightHarness: %v", err)
-		}
-		if admission2 == nil {
-			t.Fatal("nil second admission")
-		}
-		a1, _ := executioncell.DecodeAdmissionReceipt(qw.AdmissionReceipt)
-		if a1.Value().OperationalPayloadDigest == "" {
-			t.Fatal("admission operational digest empty")
-		}
-		if provider.spawnCalls.Load() != 0 {
-			t.Fatalf("provider spawned during preflight: %d", provider.spawnCalls.Load())
 		}
 	})
 

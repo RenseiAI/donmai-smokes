@@ -1,13 +1,13 @@
 module github.com/RenseiAI/donmai-smokes
 
 // Bumped 1.25.10 -> 1.25.12 (2026-07-21); bumped again to 1.26.6 (2026-08-30)
-// so this module can consume the immutable github.com/RenseiAI/donmai v0.72.8
+// so this module can consume the immutable github.com/RenseiAI/donmai v0.72.24
 // release (go 1.26.6). A module's go directive must be >= the max of its
 // dependencies'.
 go 1.26.6
 
 require (
-	github.com/RenseiAI/donmai v0.72.8
+	github.com/RenseiAI/donmai v0.72.24
 	github.com/joho/godotenv v1.5.1
 )
 
@@ -108,13 +108,13 @@ require (
 	go.opentelemetry.io/otel/metric v1.44.0 // indirect
 	go.opentelemetry.io/otel/trace v1.44.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
-	golang.org/x/crypto v0.54.0 // indirect
+	golang.org/x/crypto v0.56.0 // indirect
 	golang.org/x/mod v0.38.0 // indirect
 	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/term v0.45.0 // indirect
-	golang.org/x/text v0.40.0 // indirect
+	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/tools v0.48.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260523011958-0a33c5d7ca68 // indirect
