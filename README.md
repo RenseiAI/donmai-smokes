@@ -51,12 +51,28 @@ Both `step1` and `step2` share build-and-spawn setup via [`setup_live_daemon_tes
 ```sh
 make test                                           # GOWORK=off go test -race ./...
 GOWORK=off go test -race ./... -timeout 8m          # explicit equivalent
-GOWORK=off go test -short ./...                     # skip live-daemon tests
+./scripts/run-hermetic-tests.sh                     # exact hermetic pull-request gate
+GOWORK=off go test -race -short -count=1 -v ./...   # command run by that gate
 DONMAI_SMOKES_SKIP_LIVE_DAEMON=1 go test ./...      # opt out of live-daemon without -short
 DONMAI_SMOKES_SKIP_INSTALLER=1 go test ./...        # opt out of install lifecycle smoke
 DONMAI_SMOKES_SKIP_LIVE_API=1 go test ./...         # opt out of live external-API smokes
 make lint                                           # golangci-lint run ./...
 ```
+
+### Hermetic pull-request gate
+
+The stable `test-hermetic` check in `.github/workflows/hermetic.yml` runs the
+script above on every pull request. It checks out only this
+repository, installs the Go toolchain from `go.mod`, and requires no sibling
+checkout, running daemon, credential, installer, external API, or optional
+process tool. Tests that need any of those dependencies use the existing
+`testing.Short()` / `SkipIfShort` convention and report as skipped.
+
+The script preserves the `go test` exit status, reports PASS/FAIL/SKIP totals
+including subtests, and requires at least 150 passing tests. The floor is based
+on a fresh isolated run that observed 182 passing, 25 skipped, and 0 failed;
+it leaves removal headroom while still failing if the hermetic subset silently
+collapses.
 
 The first build of `donmai` takes 60-90s on a cold cache; warm runs are sub-second — which is also the shape of the tell that this suite once shipped without: `ok … 1.2s` cannot be a run that built `donmai`.
 
