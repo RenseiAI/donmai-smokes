@@ -39,8 +39,8 @@ github.com/Microsoft/go-winio v0.6.2 h1:F2VQgta7ecxGYO8k3ZZz3RS8fVIXVxONVUPlNERo
 github.com/Microsoft/go-winio v0.6.2/go.mod h1:yd8OoFMLzJbo9gZq8j5qaps8bJ9aShtEA8Ipt1oGCvU=
 github.com/ProtonMail/go-crypto v1.1.6 h1:ZcV+Ropw6Qn0AX9brlQLAUXfqLBc7Bl+f/DmNxpLfdw=
 github.com/ProtonMail/go-crypto v1.1.6/go.mod h1:rA3QumHc/FZ8pAHreoekgiAbzpNsfQAosU5td4SnOrE=
-github.com/RenseiAI/donmai v0.72.25 h1:p2MZlvzSUCPDdb1AcPRhJYaFQ1NtzPn6mX95kbMqWc0=
-github.com/RenseiAI/donmai v0.72.25/go.mod h1:C9w8tIC9IuiKDjMpUD5r3deeaCRx4bs9kWtge3ytie8=
+github.com/RenseiAI/donmai v0.72.26 h1:pmzTu++KyaSDPr+bXp0YBXaXfqIPGrnOLdPcL2/5gKY=
+github.com/RenseiAI/donmai v0.72.26/go.mod h1:C9w8tIC9IuiKDjMpUD5r3deeaCRx4bs9kWtge3ytie8=
 github.com/alessio/shellescape v1.4.1 h1:V7yhSDDn8LP4lc4jS8pFkt0zCnzVJlG5JXy9BVKJUX0=
 github.com/alessio/shellescape v1.4.1/go.mod h1:PZAiSCk0LJaZkiCSkPv8qIobYglO3FPpyFjDCtHLS30=
 github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be h1:9AeTilPcZAjCFIImctFaOjnTIavg87rW78vTPkQqLI8=
