@@ -538,6 +538,7 @@ func TestReceiptInteractiveSpawn(t *testing.T) {
 		qw.Body = "prove the controlled receipt-bearing interactive spawn"
 		qw.PlatformURL = platformURL
 		qw.AuthToken = "controlled-test-token"
+		qw.PermissionProfile = runner.PermissionProfileAutonomous
 		qw.RepositoryDeclaration = &workarea.RepositoryDeclarationV1{
 			Protocol: workarea.ProtocolSessionRootV1,
 			Repositories: []workarea.DeclaredRepositoryV1{{
@@ -560,7 +561,7 @@ func TestReceiptInteractiveSpawn(t *testing.T) {
 		defer cancel()
 		result, err := run.RunAdmitted(ctx, qw, admission)
 		if err != nil {
-			t.Fatalf("RunAdmitted: %v", err)
+			t.Fatalf("RunAdmitted: %v (spawnCalls=%d)", err, provider.spawnCalls.Load())
 		}
 		if result.Status != "completed" {
 			t.Fatalf("RunAdmitted status = %q, failureMode=%q error=%q", result.Status, result.FailureMode, result.Error)
