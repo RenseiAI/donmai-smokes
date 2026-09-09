@@ -111,7 +111,9 @@ func TestReleasedModuleAndBinaryIdentity(t *testing.T) {
 
 	downloadCommand := exec.Command("go", "mod", "download", "-json", releasedModule+"@"+releasedVersion)
 	downloadCommand.Dir = root
-	downloadCommand.Env = append(os.Environ(), "GOWORK=off")
+	// Probe the published tag directly in a writable private cache. Shared or
+	// proxy metadata can retain only the commit hash, without tag provenance.
+	downloadCommand.Env = append(os.Environ(), "GOWORK=off", "GOFLAGS=-modcacherw", "GOMODCACHE="+t.TempDir(), "GONOPROXY="+releasedModule)
 	downloadOutput, err := downloadCommand.CombinedOutput()
 	if err != nil {
 		t.Fatalf("download immutable module: %v\n%s", err, downloadOutput)
