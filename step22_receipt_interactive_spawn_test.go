@@ -32,7 +32,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -53,28 +52,35 @@ import (
 	afh "github.com/RenseiAI/donmai-smokes/harness"
 )
 
-const receiptInteractiveSpawnDonmaiVersion = "v0.72.24"
+const receiptInteractiveSpawnDonmaiVersion = "v0.72.25"
 
 // requireReceiptInteractiveSpawnModule binds the capability check to the
-// library code this test process actually imported. A mutable sibling checkout
-// may be newer or older and is therefore unsuitable as a library capability
-// probe.
+// immutable module selected by this repository. A mutable sibling checkout may
+// be newer or older and is therefore unsuitable as a library capability probe.
 func requireReceiptInteractiveSpawnModule(t *testing.T) {
 	t.Helper()
-	info, ok := debug.ReadBuildInfo()
-	if !ok {
-		t.Fatal("runtime build info unavailable; cannot prove imported Donmai module identity")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "list", "-m", "-json", "github.com/RenseiAI/donmai")
+	cmd.Env = append(os.Environ(), "GOWORK=off")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("resolve imported Donmai module: %v\n%s", err, output)
 	}
-	for _, dependency := range info.Deps {
-		if dependency.Path != "github.com/RenseiAI/donmai" {
-			continue
+	var selected struct {
+		Path    string
+		Version string
+		Replace *struct {
+			Path    string
+			Version string
 		}
-		if dependency.Version != receiptInteractiveSpawnDonmaiVersion || dependency.Replace != nil {
-			t.Fatalf("imported Donmai module = version %q replace %#v, want immutable %s with no replacement", dependency.Version, dependency.Replace, receiptInteractiveSpawnDonmaiVersion)
-		}
-		return
 	}
-	t.Fatal("runtime build info does not contain github.com/RenseiAI/donmai")
+	if err := json.Unmarshal(output, &selected); err != nil {
+		t.Fatalf("decode imported Donmai module: %v\n%s", err, output)
+	}
+	if selected.Path != "github.com/RenseiAI/donmai" || selected.Version != receiptInteractiveSpawnDonmaiVersion || selected.Replace != nil {
+		t.Fatalf("imported Donmai module = path %q version %q replace %#v, want immutable %s with no replacement", selected.Path, selected.Version, selected.Replace, receiptInteractiveSpawnDonmaiVersion)
+	}
 }
 
 // codexReceiptCell builds a ResolvedExecutionCell pinned to the codex

@@ -32,17 +32,17 @@ import (
 
 const (
 	releasedModule         = "github.com/RenseiAI/donmai"
-	releasedVersion        = "v0.72.24"
-	releasedModuleSum      = "h1:HuR5q2y2RRb+DIAigQPBhJFm+RxTPxKXp0rocnQUNQE="
+	releasedVersion        = "v0.72.25"
+	releasedModuleSum      = "h1:p2MZlvzSUCPDdb1AcPRhJYaFQ1NtzPn6mX95kbMqWc0="
 	releasedModuleGoModSum = "h1:C9w8tIC9IuiKDjMpUD5r3deeaCRx4bs9kWtge3ytie8="
-	releasedCommit         = "2b4e572d33451237049d85f5deb683ec7310ca98"
+	releasedCommit         = "582dd2ff5d66e714c6d9cfe4d7ca528ac2b8c2ad"
 
-	releaseBaseURL         = "https://github.com/RenseiAI/donmai/releases/download/v0.72.24/"
-	checksumManifestSHA256 = "79de38baa460e5c6cba39c87a316af320eace1939482267554aacdd523a2a8a6"
-	checksumManifest       = "460bb7a9bb9a583104a0fef6c0c0f839d9f0bc674876f02c45e008b46ff5cbfd  donmai_0.72.24_darwin_amd64.tar.gz\n" +
-		"637ac07b5a55ef22a07ae88d3a53a3f0ff90bcad7ff6a9e16610004f88142f62  donmai_0.72.24_darwin_arm64.tar.gz\n" +
-		"321c31b83a255c2b98d82881ce6b4be2f1ce3522592aa45a11f3beecf4856467  donmai_0.72.24_linux_amd64.tar.gz\n" +
-		"0a205967354a27fbf9a3f9f745c300433cdeca2c041621ec78a6bd0807e5be45  donmai_0.72.24_linux_arm64.tar.gz\n"
+	releaseBaseURL         = "https://github.com/RenseiAI/donmai/releases/download/v0.72.25/"
+	checksumManifestSHA256 = "75df4eba19efaec1602ed87b7af45c8a876a355874a5ba82728a25d7a93f1e6f"
+	checksumManifest       = "9695828e79a4dbe60089f8ce19f097ef89ed46ec94bce6d68613a0502aff8994  donmai_0.72.25_darwin_amd64.tar.gz\n" +
+		"8344daefc19c659bd435928b400b867c3b80256c3000be84ffcc0eda09755edb  donmai_0.72.25_darwin_arm64.tar.gz\n" +
+		"be3c6fc4095a47ea9b3413a29b548f3364ec6c5cd56e912bcbd62019b1adb095  donmai_0.72.25_linux_amd64.tar.gz\n" +
+		"8c3e0302ac81f14829aec03981a25ebf2b24c6dbd88bc8c60a79e65f6f8b5262  donmai_0.72.25_linux_arm64.tar.gz\n"
 
 	testSessionID       = "11111111-1111-4111-8111-111111111111"
 	testInvocationID    = "22222222-2222-4222-8222-222222222222"
@@ -58,10 +58,10 @@ const (
 )
 
 var releasedArchiveSHA256 = map[string]string{
-	"darwin/amd64": "460bb7a9bb9a583104a0fef6c0c0f839d9f0bc674876f02c45e008b46ff5cbfd",
-	"darwin/arm64": "637ac07b5a55ef22a07ae88d3a53a3f0ff90bcad7ff6a9e16610004f88142f62",
-	"linux/amd64":  "321c31b83a255c2b98d82881ce6b4be2f1ce3522592aa45a11f3beecf4856467",
-	"linux/arm64":  "0a205967354a27fbf9a3f9f745c300433cdeca2c041621ec78a6bd0807e5be45",
+	"darwin/amd64": "9695828e79a4dbe60089f8ce19f097ef89ed46ec94bce6d68613a0502aff8994",
+	"darwin/arm64": "8344daefc19c659bd435928b400b867c3b80256c3000be84ffcc0eda09755edb",
+	"linux/amd64":  "be3c6fc4095a47ea9b3413a29b548f3364ec6c5cd56e912bcbd62019b1adb095",
+	"linux/arm64":  "8c3e0302ac81f14829aec03981a25ebf2b24c6dbd88bc8c60a79e65f6f8b5262",
 }
 
 func TestReleasedModuleAndBinaryIdentity(t *testing.T) {
@@ -163,7 +163,7 @@ func TestReleasedModuleAndBinaryIdentity(t *testing.T) {
 	if !ok {
 		t.Fatalf("Donmai %s publishes no binary asset for %s", releasedVersion, platform)
 	}
-	archiveName := fmt.Sprintf("donmai_0.72.24_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	archiveName := fmt.Sprintf("donmai_0.72.25_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
 	archive := downloadReleaseFile(t, archiveName, 64<<20)
 	archiveDigest := sha256.Sum256(archive)
 	if got := hex.EncodeToString(archiveDigest[:]); got != expectedArchiveDigest {
@@ -178,7 +178,7 @@ func TestReleasedModuleAndBinaryIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("donmai --version: %v\n%s", err, versionOutput)
 	}
-	if got := strings.TrimSpace(string(versionOutput)); got != "donmai version 0.72.24" {
+	if got := strings.TrimSpace(string(versionOutput)); got != "donmai version 0.72.25" {
 		t.Fatalf("donmai --version = %q", got)
 	}
 }

@@ -1,13 +1,13 @@
 module github.com/RenseiAI/donmai-smokes
 
 // Bumped 1.25.10 -> 1.25.12 (2026-07-21); bumped again to 1.26.6 (2026-08-30)
-// so this module can consume the immutable github.com/RenseiAI/donmai v0.72.24
+// so this module can consume the immutable github.com/RenseiAI/donmai v0.72.25
 // release (go 1.26.6). A module's go directive must be >= the max of its
 // dependencies'.
 go 1.26.6
 
 require (
-	github.com/RenseiAI/donmai v0.72.24
+	github.com/RenseiAI/donmai v0.72.25
 	github.com/joho/godotenv v1.5.1
 )
 
