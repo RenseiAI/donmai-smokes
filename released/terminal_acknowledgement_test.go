@@ -32,17 +32,17 @@ import (
 
 const (
 	releasedModule         = "github.com/RenseiAI/donmai"
-	releasedVersion        = "v0.54.0"
-	releasedModuleSum      = "h1:rJ4ozWp85r5+I5m+UtRWFA7yCj1mqV6d8TajVpI94iU="
-	releasedModuleGoModSum = "h1:MWoWFIhXU0nKcNmPrlwaGHIIVK/efcrg6YPY76vuvxw="
-	releasedCommit         = "f911e1af373d4610b4f4b262008ff386504c5140"
+	releasedVersion        = "v0.72.26"
+	releasedModuleSum      = "h1:pmzTu++KyaSDPr+bXp0YBXaXfqIPGrnOLdPcL2/5gKY="
+	releasedModuleGoModSum = "h1:C9w8tIC9IuiKDjMpUD5r3deeaCRx4bs9kWtge3ytie8="
+	releasedCommit         = "f33d4524b4b10c794b63a1630b2d71a10a10175f"
 
-	releaseBaseURL         = "https://github.com/RenseiAI/donmai/releases/download/v0.54.0/"
-	checksumManifestSHA256 = "1d684c0551b1fa0b8417004f29210f2496c0de3ad5f6a5ef7d7297b9681cc71a"
-	checksumManifest       = "d39fcaa55d1e131883f39d0adccc4c82fe5f1cbdd34d16ec3611bf3e0828857b  donmai_0.54.0_darwin_amd64.tar.gz\n" +
-		"74d27408250bdbb510a143008d7e4db633825770963a557be4e6db4e3300e0af  donmai_0.54.0_darwin_arm64.tar.gz\n" +
-		"fdf7a42ac1a1763c7b96e1130c6d77736e99c3a9ee274c655a24a159c8eb604b  donmai_0.54.0_linux_amd64.tar.gz\n" +
-		"1e91bcb11531e0c446abe5a54ead9f1b1048188dfe44fe7702771b185c01b2fc  donmai_0.54.0_linux_arm64.tar.gz\n"
+	releaseBaseURL         = "https://github.com/RenseiAI/donmai/releases/download/v0.72.26/"
+	checksumManifestSHA256 = "7a2228b2dd94ced4d1d555500089eafb8c482e5a97315f066ff78b0c40899ba2"
+	checksumManifest       = "6adaf251a8e41ba924f057fc26644963c52df24886a93b735a9d744146cd6a19  donmai_0.72.26_darwin_amd64.tar.gz\n" +
+		"516e23af6ee32c40267cfb25dd61d1241dfbf9f86d05028dfcf848a8e532dbfb  donmai_0.72.26_darwin_arm64.tar.gz\n" +
+		"a33101d6ae79f4d71bf88509f529c5a9d9b3144a0d2cd795963375be145a24fb  donmai_0.72.26_linux_amd64.tar.gz\n" +
+		"881ab53ba1968aaed31b43b8b7db54b7413facb2541dda80779a329a44784f97  donmai_0.72.26_linux_arm64.tar.gz\n"
 
 	testSessionID       = "11111111-1111-4111-8111-111111111111"
 	testInvocationID    = "22222222-2222-4222-8222-222222222222"
@@ -58,10 +58,10 @@ const (
 )
 
 var releasedArchiveSHA256 = map[string]string{
-	"darwin/amd64": "d39fcaa55d1e131883f39d0adccc4c82fe5f1cbdd34d16ec3611bf3e0828857b",
-	"darwin/arm64": "74d27408250bdbb510a143008d7e4db633825770963a557be4e6db4e3300e0af",
-	"linux/amd64":  "fdf7a42ac1a1763c7b96e1130c6d77736e99c3a9ee274c655a24a159c8eb604b",
-	"linux/arm64":  "1e91bcb11531e0c446abe5a54ead9f1b1048188dfe44fe7702771b185c01b2fc",
+	"darwin/amd64": "6adaf251a8e41ba924f057fc26644963c52df24886a93b735a9d744146cd6a19",
+	"darwin/arm64": "516e23af6ee32c40267cfb25dd61d1241dfbf9f86d05028dfcf848a8e532dbfb",
+	"linux/amd64":  "a33101d6ae79f4d71bf88509f529c5a9d9b3144a0d2cd795963375be145a24fb",
+	"linux/arm64":  "881ab53ba1968aaed31b43b8b7db54b7413facb2541dda80779a329a44784f97",
 }
 
 func TestReleasedModuleAndBinaryIdentity(t *testing.T) {
@@ -111,7 +111,9 @@ func TestReleasedModuleAndBinaryIdentity(t *testing.T) {
 
 	downloadCommand := exec.Command("go", "mod", "download", "-json", releasedModule+"@"+releasedVersion)
 	downloadCommand.Dir = root
-	downloadCommand.Env = append(os.Environ(), "GOWORK=off")
+	// Probe the published tag directly in a writable private cache. Shared or
+	// proxy metadata can retain only the commit hash, without tag provenance.
+	downloadCommand.Env = append(os.Environ(), "GOWORK=off", "GOFLAGS=-modcacherw", "GOMODCACHE="+t.TempDir(), "GONOPROXY="+releasedModule)
 	downloadOutput, err := downloadCommand.CombinedOutput()
 	if err != nil {
 		t.Fatalf("download immutable module: %v\n%s", err, downloadOutput)
@@ -163,7 +165,7 @@ func TestReleasedModuleAndBinaryIdentity(t *testing.T) {
 	if !ok {
 		t.Fatalf("Donmai %s publishes no binary asset for %s", releasedVersion, platform)
 	}
-	archiveName := fmt.Sprintf("donmai_0.54.0_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	archiveName := fmt.Sprintf("donmai_0.72.26_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
 	archive := downloadReleaseFile(t, archiveName, 64<<20)
 	archiveDigest := sha256.Sum256(archive)
 	if got := hex.EncodeToString(archiveDigest[:]); got != expectedArchiveDigest {
@@ -178,7 +180,7 @@ func TestReleasedModuleAndBinaryIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("donmai --version: %v\n%s", err, versionOutput)
 	}
-	if got := strings.TrimSpace(string(versionOutput)); got != "donmai version 0.54.0" {
+	if got := strings.TrimSpace(string(versionOutput)); got != "donmai version 0.72.26" {
 		t.Fatalf("donmai --version = %q", got)
 	}
 }
