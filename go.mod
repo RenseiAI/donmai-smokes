@@ -7,7 +7,8 @@ module github.com/RenseiAI/donmai-smokes
 go 1.26.6
 
 require (
-	github.com/RenseiAI/donmai v0.72.25
+	github.com/RenseiAI/donmai v0.72.26
+	github.com/coder/websocket v1.8.15
 	github.com/joho/godotenv v1.5.1
 )
 
@@ -32,7 +33,6 @@ require (
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/cloudflare/circl v1.6.3 // indirect
-	github.com/coder/websocket v1.8.15 // indirect
 	github.com/creack/pty v1.1.24 // indirect
 	github.com/cyberphone/json-canonicalization v0.0.0-20241213102144-19d51d7fe467 // indirect
 	github.com/cyphar/filepath-securejoin v0.6.1 // indirect
