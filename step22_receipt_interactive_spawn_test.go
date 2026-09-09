@@ -52,7 +52,7 @@ import (
 	afh "github.com/RenseiAI/donmai-smokes/harness"
 )
 
-const receiptInteractiveSpawnDonmaiVersion = "v0.72.25"
+const receiptInteractiveSpawnDonmaiVersion = "v0.72.26"
 
 // requireReceiptInteractiveSpawnModule binds the capability check to the
 // immutable module selected by this repository. A mutable sibling checkout may
