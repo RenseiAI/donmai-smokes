@@ -190,34 +190,19 @@ func TestArchAssessNativeEndToEnd(t *testing.T) {
 		OutputPath: filepath.Join(binDir, "donmai"),
 	})
 
-	// Capability probe: the native arch-intel diff-only pipeline ships the
-	// `arch assess` subcommand. A binary that predates the native port (e.g.
-	// the canonical donmai checkout before the port lands) lacks it and has no
-	// native diff-fetch/gate to assert against. DONMAI_ARCH_SOURCE_DIR points
-	// the build at an in-flight source port to exercise the real surface.
-	//
-	// This probe runs AFTER the binary built, so it can only mean what it
-	// says. DeclineLive files it as a decline rather than a plain skip: a run
-	// in which every live smoke declines proved nothing and is red.
-	if !binaryHasNativeArchAssess(t, donmaiBinary) {
-		afh.DeclineLive(t, "donmai binary at %q predates the native arch-intel port "+
-			"(no native `arch assess` surface) — point DONMAI_ARCH_SOURCE_DIR at a "+
-			"checkout that has it to exercise this smoke", donmaiBinary)
-	}
-
 	// Fake `gh` shim — fixture PR view + diff, no network.
 	fakeBinDir := t.TempDir()
 	writeFakeGh(t, fakeBinDir)
 
 	// ── (a) Observations: native diff-fetch produces real observations ────────
 	//
-	// Run with --no-llm + gate-policy none so the result is the deterministic
+	// Run with gate-policy none so the result is the deterministic
 	// diff-only path with no gate side effects. The fixture's three zone files +
 	// one decision signal MUST surface as observations — proving FetchPRDiff fed
 	// real content into ReadDiffObservations (not the old empty PrDiff{} stub).
 	t.Run("observations_from_native_diff_fetch", func(t *testing.T) {
 		r := runArchAssess(t, donmaiBinary, fakeBinDir, 60*time.Second, nil,
-			"--no-llm", "--gate-policy", "none")
+			"--gate-policy", "none")
 		if r.exitCode != 0 {
 			t.Fatalf("expected exit 0 (gate none), got %d\n%s", r.exitCode, r.combined)
 		}
@@ -228,7 +213,7 @@ func TestArchAssessNativeEndToEnd(t *testing.T) {
 		}
 
 		if res.Mode != "native-diff-only" {
-			t.Errorf("expected mode native-diff-only with --no-llm, got %q\n%s", res.Mode, r.stdout)
+			t.Errorf("expected mode native-diff-only, got %q\n%s", res.Mode, r.stdout)
 		}
 		if len(res.Observations) == 0 {
 			t.Fatalf("native diff-fetch produced ZERO observations — the diff-fetch "+
@@ -282,7 +267,7 @@ func TestArchAssessNativeEndToEnd(t *testing.T) {
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
 				r := runArchAssess(t, donmaiBinary, fakeBinDir, 60*time.Second, nil,
-					"--no-llm", "--gate-policy", tc.policy)
+					"--gate-policy", tc.policy)
 
 				var res archAssessResult
 				if err := afh.JSONUnmarshal(r.stdout, &res); err != nil {
@@ -311,7 +296,7 @@ func TestArchAssessNativeEndToEnd(t *testing.T) {
 	// mirrors the gate in the exit code.
 	t.Run("summary_mode_mirrors_gate", func(t *testing.T) {
 		r := runArchAssess(t, donmaiBinary, fakeBinDir, 60*time.Second, nil,
-			"--no-llm", "--gate-policy", "zero-deviations", "--summary")
+			"--gate-policy", "zero-deviations", "--summary")
 		text := r.stdout
 		if r.exitCode != 1 {
 			t.Errorf("summary + zero-deviations: expected exit 1 (gated), got %d\n%s", r.exitCode, r.combined)
@@ -326,20 +311,4 @@ func TestArchAssessNativeEndToEnd(t *testing.T) {
 			t.Errorf("summary text should announce the gate block, got:\n%s", text)
 		}
 	})
-}
-
-// binaryHasNativeArchAssess reports whether the donmai binary ships the native
-// arch-intel `arch assess` surface. The `--no-llm` flag is present on the native
-// port (afcli/arch.go newArchAssessCmd) and forces the OSS-shipped diff-only
-// path; binaries that predate the port omit it. The probe runs
-// `arch assess --help` and looks for the flag.
-//
-// This lets the smoke skip cleanly (rather than fail) when built against a
-// donmai checkout where the native pipeline has not yet merged.
-func binaryHasNativeArchAssess(t *testing.T, binary string) bool {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	out, _ := exec.CommandContext(ctx, binary, "arch", "assess", "--help").CombinedOutput() //nolint:gosec // binary is test-built.
-	return strings.Contains(string(out), "--no-llm")
 }
