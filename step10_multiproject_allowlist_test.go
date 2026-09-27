@@ -50,6 +50,14 @@ func TestExplicitProjectAdmissionRouting(t *testing.T) {
 	)
 	registrationToken := "rs" + "k_live_smoke_project_admission" //nolint:gosec // synthetic httptest credential
 	var pollRequests atomic.Int32
+	type rejectedPollWork struct{ sessionID, reason string }
+	var unexpectedNack atomic.Pointer[rejectedPollWork]
+	assertNoPollRejection := func(t *testing.T) {
+		t.Helper()
+		if rejected := unexpectedNack.Load(); rejected != nil {
+			t.Fatalf("eligible polled session %s was unexpectedly rejected: %s", rejected.sessionID, rejected.reason)
+		}
+	}
 	orchestrator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
@@ -94,6 +102,26 @@ func TestExplicitProjectAdmissionRouting(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"acknowledged": true})
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/lock-refresh"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "refreshed": true})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/nack"):
+			// Both polled items are eligible. A startup rejection is a failure,
+			// not a successful mock requeue: this peer deliberately offers once.
+			var rejected struct {
+				Reason string `json:"reason"`
+			}
+			reason := "invalid bounded rejection body"
+			if err := json.NewDecoder(io.LimitReader(r.Body, 64*1024)).Decode(&rejected); err == nil {
+				reason = rejected.Reason
+				if len(reason) > 512 {
+					reason = reason[:512]
+				}
+			}
+			sessionPath := strings.TrimSuffix(r.URL.Path, "/nack")
+			sessionID := sessionPath[strings.LastIndex(sessionPath, "/")+1:]
+			if sessionID != sessionAlpha && sessionID != sessionBeta {
+				sessionID = "unknown"
+			}
+			unexpectedNack.CompareAndSwap(nil, &rejectedPollWork{sessionID: sessionID, reason: reason})
+			http.Error(w, "unexpected rejection of eligible smoke work", http.StatusConflict)
 		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/sessions/"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 		default:
@@ -233,6 +261,7 @@ autoUpdate:
 		)
 		deadline := time.Now().Add(10 * time.Second)
 		for time.Now().Before(deadline) {
+			assertNoPollRejection(t)
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 				live.URL+"/api/daemon/sessions/"+sessionID, nil)
@@ -255,6 +284,7 @@ autoUpdate:
 			}
 			time.Sleep(50 * time.Millisecond)
 		}
+		assertNoPollRejection(t)
 		if status != http.StatusOK {
 			t.Fatalf("session detail %s never reached 200; last status=%d\n--- body ---\n%s\n--- daemon log tail ---\n%s",
 				sessionID, status, body, logBuf.String())
