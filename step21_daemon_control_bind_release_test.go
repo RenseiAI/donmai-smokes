@@ -40,6 +40,7 @@ func TestDaemonControlBindRelease(t *testing.T) {
 	afh.SkipIfKnob(t, afh.SkipLiveDaemonEnv, "operator opted out of the live-daemon smoke")
 
 	sourceBinary, sourceDir := afh.RequireDonmaiBinary(t, afh.LiveBinaryOptions{
+		SourceDir:  inFlightSourceDir(),
 		OutputPath: filepath.Join(t.TempDir(), "donmai-source"),
 		Env:        append(os.Environ(), "GOWORK=off"),
 	})
@@ -143,9 +144,15 @@ func controlBindReleasedBinary(t *testing.T) string {
 	if !found {
 		t.Fatal("release archive has no donmai binary")
 	}
-	version, err := exec.Command(binary, "--version").CombinedOutput() //nolint:gosec // verified release archive and fixed arguments
+	versionCtx, versionCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer versionCancel()
+	versionHome := t.TempDir()
+	versionCmd := exec.CommandContext(versionCtx, binary, "--version") //nolint:gosec // verified release archive and fixed arguments
+	versionCmd.Dir = versionHome
+	versionCmd.Env = controlBindSmokeEnv(versionHome)
+	version, err := versionCmd.CombinedOutput()
 	if err != nil || !strings.Contains(string(version), "donmai version "+controlBindReleaseVersion) {
-		t.Fatalf("released binary version: err=%v output=%q", err, version)
+		t.Fatalf("released binary version: err=%v timeout=%v output=%q", err, versionCtx.Err(), version)
 	}
 	t.Logf("verified release v%s archive %s sha256=%s", controlBindReleaseVersion, archiveName, wantSHA)
 	return binary
@@ -158,9 +165,29 @@ func controlBindSmokeEnv(home string) []string {
 		"XDG_CONFIG_HOME=" + filepath.Join(home, ".config"),
 		"DONMAI_STATE_HOME=" + home,
 		"DONMAI_DAEMON_FORCE_STUB=1",
-		"DONMAI_ORCHESTRATOR_URL=http://127.0.0.1:1",
 		"NO_COLOR=1",
 	}
+}
+
+func controlBindSmokeConfig(t *testing.T, home string) string {
+	t.Helper()
+	// The explicit manual schedule prevents this foreground fixture from
+	// starting a release updater, regardless of the host clock.
+	const body = `apiVersion: donmai.dev/v1
+kind: LocalDaemon
+machine:
+  id: smoke-control-bind
+orchestrator:
+  url: http://127.0.0.1:1
+autoUpdate:
+  channel: stable
+  schedule: manual
+`
+	path := filepath.Join(home, "daemon.yaml")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write private daemon config: %v", err)
+	}
+	return path
 }
 
 func assertControlBindRejected(t *testing.T, binary, host string) {
@@ -170,9 +197,10 @@ func assertControlBindRejected(t *testing.T, binary, host string) {
 		t.Fatalf("pick private closed port: %v", err)
 	}
 	home := t.TempDir()
+	configPath := controlBindSmokeConfig(t, home)
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, binary, "daemon", "run", "--host", host, "--port", strconv.Itoa(port), "--skip-wizard") //nolint:gosec // verified binary and fixed fixture arguments
+	cmd := exec.CommandContext(ctx, binary, "daemon", "run", "--host", host, "--port", strconv.Itoa(port), "--config", configPath, "--skip-wizard", "--standalone-creds=off") //nolint:gosec // verified binary and fixed fixture arguments
 	cmd.Dir = home
 	cmd.Env = controlBindSmokeEnv(home)
 	started := time.Now()
@@ -197,6 +225,8 @@ func assertDefaultControlLoopback(t *testing.T, binary string) {
 		t.Fatalf("pick private closed port: %v", err)
 	}
 	home := t.TempDir()
+	configPath := controlBindSmokeConfig(t, home)
+	t.Chdir(home)
 	url := fmt.Sprintf("http://127.0.0.1:%d", port)
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
@@ -204,7 +234,7 @@ func assertDefaultControlLoopback(t *testing.T, binary string) {
 	logs := afh.NewLogTail(32 * 1024)
 	live, err := afh.SpawnDaemon(ctx, afh.SpawnOptions{
 		Binary:         binary,
-		Args:           []string{"daemon", "run", "--port", strconv.Itoa(port), "--skip-wizard"},
+		Args:           []string{"daemon", "run", "--port", strconv.Itoa(port), "--config", configPath, "--skip-wizard", "--standalone-creds=off"},
 		Env:            controlBindSmokeEnv(home),
 		HomeDir:        home,
 		LogSink:        logs,
