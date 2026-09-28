@@ -63,10 +63,10 @@ func writeFakeGh(t *testing.T, dir string) {
 	t.Helper()
 	const script = `#!/bin/sh
 # Fake gh for the arch-assess smoke. Handles only:
-#   gh pr view <ref> --json title,body,files
+#   gh pr view <ref> --json title,body,changedFiles,files
 #   gh pr diff <ref>
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
-  printf '%s' '{"title":"Add auth middleware and DB migration","body":"Chose bcrypt over argon2 for password hashing.","files":[{"path":"src/auth/middleware.ts","additions":40,"deletions":0},{"path":"src/db/migrations/0001_users.sql","additions":12,"deletions":0},{"path":"src/api/handlers/login.ts","additions":25,"deletions":3}]}'
+  printf '%s' '{"title":"Add auth middleware and DB migration","body":"Chose bcrypt over argon2 for password hashing.","changedFiles":3,"files":[{"path":"src/auth/middleware.ts","additions":40,"deletions":0},{"path":"src/db/migrations/0001_users.sql","additions":12,"deletions":0},{"path":"src/api/handlers/login.ts","additions":25,"deletions":3}]}'
   exit 0
 fi
 if [ "$1" = "pr" ] && [ "$2" = "diff" ]; then
