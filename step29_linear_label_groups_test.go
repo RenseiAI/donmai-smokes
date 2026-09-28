@@ -88,6 +88,17 @@ func (f *labelGroupSmokeFixture) serve(w http.ResponseWriter, r *http.Request) {
 			active = append(active, label)
 		}
 		write(map[string]any{"issueLabels": map[string]any{"nodes": active, "pageInfo": map[string]any{"hasNextPage": false, "endCursor": nil}}})
+	case strings.Contains(request.Query, "ListLabels("):
+		// Older clients ask only for id/name and collapse equal names into a
+		// map. Answer that query faithfully so the baseline fails at the
+		// missing native scope/group/membership assertion below.
+		rows := make([]map[string]any, 0, len(f.labels))
+		for _, label := range f.labels {
+			if label["archived"] != true {
+				rows = append(rows, map[string]any{"id": label["id"], "name": label["name"]})
+			}
+		}
+		write(map[string]any{"issueLabels": map[string]any{"nodes": rows, "pageInfo": map[string]any{"hasNextPage": false, "endCursor": nil}}})
 	case strings.Contains(request.Query, "CreateNativeLabel"):
 		f.creates++
 		input := request.Variables["input"].(map[string]any)
@@ -227,9 +238,26 @@ func TestLinearNativeLabelGroupCLI(t *testing.T) {
 		}
 		var value map[string]any
 		if args[0] == "list-labels" {
-			var labels []map[string]any
-			if err := json.Unmarshal(output, &labels); err != nil {
+			var decoded any
+			if err := json.Unmarshal(output, &decoded); err != nil {
 				t.Fatalf("decode catalog: %v\n%s", err, output)
+			}
+			var labels []map[string]any
+			switch catalog := decoded.(type) {
+			case []any:
+				for _, row := range catalog {
+					label, ok := row.(map[string]any)
+					if !ok {
+						t.Fatalf("invalid native catalog row: %v", row)
+					}
+					labels = append(labels, label)
+				}
+			case map[string]any:
+				for name, id := range catalog {
+					labels = append(labels, map[string]any{"id": id, "name": name})
+				}
+			default:
+				t.Fatalf("unexpected catalog shape: %T", decoded)
 			}
 			return map[string]any{"labels": labels}
 		}
