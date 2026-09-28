@@ -178,15 +178,17 @@ func TestHostSetupWizardGuidance(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		t.Fatalf("wizard did not exit after all prompts\ntranscript:\n%s", output.snapshot())
 	}
-	if err := terminal.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
-		t.Errorf("close wizard PTY: %v", err)
-	}
+	// Let the reader drain the child's final output before closing the master.
+	// Process exit alone does not mean those bytes have reached output yet.
 	select {
 	case <-readerDone:
 		readerJoined = true
 		t.Log("wizard PTY reader joined")
 	case <-time.After(5 * time.Second):
 		t.Fatal("PTY reader did not join after wizard exit")
+	}
+	if err := terminal.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
+		t.Errorf("close wizard PTY: %v", err)
 	}
 
 	info, err := os.Stat(config)
