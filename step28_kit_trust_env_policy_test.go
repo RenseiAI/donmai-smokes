@@ -93,9 +93,11 @@ func TestKitTrustEnvPolicyThroughCLI(t *testing.T) {
 				t.Fatalf("make private config directory: %v", err)
 			}
 			config := fmt.Sprintf(kitTrustEnvDaemonYAML, trustBlock, scanDir)
-			if err := os.WriteFile(filepath.Join(configDir, "daemon.yaml"), []byte(config), 0o600); err != nil {
+			configPath := filepath.Join(configDir, "daemon.yaml")
+			if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
 				t.Fatalf("write private daemon config: %v", err)
 			}
+			t.Chdir(home)
 			port, err := afh.PickFreePort()
 			if err != nil {
 				t.Fatalf("pick daemon port: %v", err)
@@ -106,7 +108,7 @@ func TestKitTrustEnvPolicyThroughCLI(t *testing.T) {
 			defer cancel()
 			live, err := afh.SpawnDaemon(ctx, afh.SpawnOptions{
 				Binary: bin,
-				Args:   []string{"host", "run", "--port", fmt.Sprint(port), "--skip-wizard", "--standalone-creds=off"},
+				Args:   []string{"host", "run", "--port", fmt.Sprint(port), "--config", configPath, "--skip-wizard", "--standalone-creds=off"},
 				Env: []string{
 					"PATH=/usr/bin:/bin:/usr/sbin:/sbin",
 					"HOME=" + home,
