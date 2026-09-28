@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -250,14 +251,89 @@ func assertDefaultControlLoopback(t *testing.T, binary string) {
 	if live.Cmd.ProcessState == nil || !live.Cmd.ProcessState.Exited() {
 		t.Fatalf("owned daemon pid=%d was not reaped", live.Cmd.Process.Pid)
 	}
-	assertControlPortFree(t, port)
+	assertControlPortFree(t, port, func() string {
+		return controlPortFailureReceipt(port, live.Cmd, logs.String())
+	})
 }
 
-func assertControlPortFree(t *testing.T, port int) {
+func assertControlPortFree(t *testing.T, port int, failureReceipt ...func() string) {
 	t.Helper()
 	l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
+		if len(failureReceipt) != 0 {
+			t.Fatalf("private control port %d remained bound: %v\n%s", port, err, failureReceipt[0]())
+		}
 		t.Fatalf("private control port %d remained bound: %v", port, err)
 	}
 	_ = l.Close()
+}
+
+// This runs only after the immediate rebind fails. A reaped parent PID does
+// not identify who owns a socket now, so capture the current port-specific
+// socket view separately from the owned process's terminal state.
+func controlPortFailureReceipt(port int, owned *exec.Cmd, daemonLogs string) string {
+	const maxLogBytes = 2048
+	if len(daemonLogs) > maxLogBytes {
+		daemonLogs = daemonLogs[len(daemonLogs)-maxLogBytes:]
+	}
+	state := "unavailable"
+	pid := 0
+	if owned != nil {
+		if owned.Process != nil {
+			pid = owned.Process.Pid
+		}
+		if owned.ProcessState != nil {
+			state = fmt.Sprintf("exited=%t exitCode=%d status=%s", owned.ProcessState.Exited(), owned.ProcessState.ExitCode(), owned.ProcessState.String())
+		}
+	}
+	return fmt.Sprintf("former owned pid=%d processState=%s\n%s\nprivate daemon log tail (last %d bytes):\n%s",
+		pid, state, controlPortSocketReceipt(port), maxLogBytes, daemonLogs)
+}
+
+func controlPortSocketReceipt(port int) string {
+	const maxOutputBytes = 4096
+	var lsofPath string
+	for _, candidate := range []string{"/usr/sbin/lsof", "/usr/bin/lsof"} {
+		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() && info.Mode()&0o111 != 0 {
+			lsofPath = candidate
+			break
+		}
+	}
+	if lsofPath == "" {
+		return "target-port lsof unavailable"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, lsofPath, "-nP", "-iTCP:"+strconv.Itoa(port), "-FpcTn") //nolint:gosec // fixed system tool, selected private port only
+	cmd.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin"}
+	output := &controlPortCappedOutput{limit: maxOutputBytes}
+	cmd.Stdout = output
+	cmd.Stderr = output
+	err := cmd.Run()
+	return fmt.Sprintf("target-port lsof path=%s exit=%v timeout=%t truncated=%t output=%q",
+		lsofPath, err, ctx.Err() == context.DeadlineExceeded, output.truncated, output.buf.String())
+}
+
+type controlPortCappedOutput struct {
+	mu        sync.Mutex
+	buf       bytes.Buffer
+	limit     int
+	truncated bool
+}
+
+func (o *controlPortCappedOutput) Write(p []byte) (int, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	n := len(p)
+	remaining := o.limit - o.buf.Len()
+	if remaining > 0 {
+		if len(p) > remaining {
+			p = p[:remaining]
+		}
+		_, _ = o.buf.Write(p)
+	}
+	if n > len(p) || (remaining <= 0 && n > 0) {
+		o.truncated = true
+	}
+	return n, nil
 }
