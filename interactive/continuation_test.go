@@ -43,6 +43,12 @@ func TestContinuationFixtureProcess(t *testing.T) {
 	write("et\x07T\x1b[31")
 	read('b')
 	write("mRED\x1b[0m")
+	read('c')
+	// OSC8 metadata may contain raw non-UTF-8 bytes even though the public
+	// display projection only exposes safe glyphs and attributes.
+	write("\x1b]8;;https://example.invalid/\xff\x1b\\")
+	read('d')
+	write("X\x1b]8;;\x1b\\")
 	read('q')
 	write("\x1b[?1049l")
 	os.Exit(0)
@@ -161,13 +167,40 @@ func TestContinuationCheckpointPTYParity(t *testing.T) {
 		}
 	}
 
+	if _, err := driver.WriteInput([]byte{'c'}); err != nil {
+		t.Fatalf("driver phase c: %v", err)
+	}
+	metadata := []byte("\x1b]8;;https://example.invalid/\xff\x1b\\")
+	waitContinuationOutput(t, firstTail, firstMirror, metadata)
+	waitContinuationOutput(t, secondTail, secondMirror, metadata)
+	third, thirdTail := openSmokeContinuation(t, sess)
+	t.Cleanup(func() { _ = thirdTail.Close() })
+	if third.Epoch != second.Epoch || third.AtSeq <= second.AtSeq {
+		t.Fatalf("metadata boundary epoch=%d atSeq=%d after second %d/%d", third.Epoch, third.AtSeq, second.Epoch, second.AtSeq)
+	}
+	thirdMirror := restoreSmokeContinuation(t, third)
+	t.Cleanup(func() { _ = thirdMirror.Close() })
+	assertContinuationScreen(t, "raw OSC8 metadata checkpoint", sess, thirdMirror, "BASETRED")
+	if _, err := driver.WriteInput([]byte{'d'}); err != nil {
+		t.Fatalf("driver phase d: %v", err)
+	}
+	suffix := []byte("X\x1b]8;;\x1b\\")
+	waitContinuationOutput(t, firstTail, firstMirror, suffix)
+	waitContinuationOutput(t, secondTail, secondMirror, suffix)
+	waitContinuationOutput(t, thirdTail, thirdMirror, suffix)
+	for name, mirror := range map[string]*ptyhost.ContinuationTerminal{"first": firstMirror, "second": secondMirror, "metadata": thirdMirror} {
+		assertContinuationScreen(t, name+" after metadata suffix", sess, mirror, "BASETREDX")
+	}
+
 	if _, err := driver.WriteInput([]byte{'q'}); err != nil {
 		t.Fatalf("driver phase q: %v", err)
 	}
 	waitContinuationExit(t, firstTail, firstMirror)
 	waitContinuationExit(t, secondTail, secondMirror)
+	waitContinuationExit(t, thirdTail, thirdMirror)
 	assertContinuationScreen(t, "final screen", sess, firstMirror, "")
 	assertContinuationScreen(t, "final screen second mirror", sess, secondMirror, "")
+	assertContinuationScreen(t, "final screen metadata mirror", sess, thirdMirror, "")
 }
 
 func drainContinuationViewer(frames <-chan attachwire.Frame) {
