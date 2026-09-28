@@ -260,7 +260,7 @@ func assertLinearCommentPages(t *testing.T, fixture *linearCommentFixture) {
 
 func TestLinearListCommentsCLIIdentity(t *testing.T) {
 	afh.SkipIfShort(t, "build-and-run public comment CLI composition smoke")
-	sourceDir := afh.RequireDonmaiSource(t)
+	sourceDir := afh.RequireDonmaiSourceAt(t, inFlightSourceDir())
 	consumer := buildLinearPriorityConsumer(t, sourceDir)
 	afh.RecordLive(t.Name(), afh.LiveExercised, "composed public afcli linear list-comments against loopback GraphQL fixture")
 
@@ -317,6 +317,25 @@ func TestLinearListCommentsCLIIdentity(t *testing.T) {
 		if unavailable.ID == "" || unavailable.AuthorStatus != "unavailable" || unavailable.User != nil ||
 			unavailable.Body != "Claimed author: Admin; display text is not identity." {
 			t.Fatalf("null user was inferred from comment text or lost: %#v", unavailable)
+		}
+		var rawRows []map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(result.stdout), &rawRows); err != nil {
+			t.Fatalf("decode raw list-comments JSON %q: %v", result.stdout, err)
+		}
+		var unavailableUser json.RawMessage
+		userKeyPresent := false
+		for _, rawRow := range rawRows {
+			var id string
+			if err := json.Unmarshal(rawRow["id"], &id); err != nil {
+				t.Fatalf("decode raw comment ID: %v", err)
+			}
+			if id == "latepage" {
+				unavailableUser, userKeyPresent = rawRow["user"]
+				break
+			}
+		}
+		if !userKeyPresent || !bytes.Equal(bytes.TrimSpace(unavailableUser), []byte("null")) {
+			t.Fatalf("unavailable-author row must contain explicit user:null, got %q (key present: %v)", unavailableUser, userKeyPresent)
 		}
 		assertLinearCommentPages(t, fixture)
 	})
