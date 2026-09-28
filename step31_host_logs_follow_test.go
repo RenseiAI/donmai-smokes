@@ -59,7 +59,7 @@ func TestHostLogsFollowAppendAfterEOF(t *testing.T) {
 	afh.SkipIfShort(t, "compiled host logs --follow smoke")
 	afh.SkipIfKnob(t, afh.SkipLiveDaemonEnv, "operator opted out of live-process smokes")
 
-	bin, source := afh.RequireDonmaiBinary(t, afh.LiveBinaryOptions{})
+	bin, source := afh.RequireDonmaiBinary(t, afh.LiveBinaryOptions{SourceDir: inFlightSourceDir()})
 	t.Logf("compiled donmai from %s", source)
 	home := t.TempDir()
 	logPath := filepath.Join(home, ".donmai", "daemon.log")
@@ -73,6 +73,7 @@ func TestHostLogsFollowAppendAfterEOF(t *testing.T) {
 	stdout := &hostLogOutput{notify: make(chan struct{}, 1)}
 	stderr := &hostLogOutput{notify: make(chan struct{}, 1)}
 	cmd := exec.Command(bin, "host", "logs", "--follow") //nolint:gosec // compiled SUT and fixed args.
+	cmd.Dir = home
 	cmd.Env = []string{
 		"HOME=" + home,
 		"DONMAI_STATE_HOME=" + home,
