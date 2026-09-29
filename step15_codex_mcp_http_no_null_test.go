@@ -22,20 +22,18 @@ package smokes
 //
 //	A full live codex dispatch requires the codex app-server binary to be
 //	present, a valid OpenAI key, and a network connection — none of which
-//	are guaranteed in CI. Rather than a live dispatch, this smoke targets
-//	the load-bearing invariant directly: the JSON shape that donmai hands
-//	to codex's config/batchWrite must never contain "null" values and must
-//	carry the correct fields for each transport type.
+//	are guaranteed in CI. The always-run unit checks target the
+//	load-bearing shared MCP-entry invariant: no "null" values and the
+//	correct fields for each transport type.
 //
-//	The test constructs the exact JSON envelope (mirroring what the fixed
-//	mcpServersConfig produces) and asserts the invariants. This is the
-//	same approach step14 uses for Gemini: test the wire contract
-//	independently of the binary, no donmai module import needed.
+//	Those checks construct an independent envelope; they do not import
+//	Donmai's production serializer or prove its emitted bytes. The live
+//	gate uses the native Codex config protocol and reads back the result.
 //
 //	A live gate (TestCodexMCPConfigLiveGate) additionally checks whether
-//	the codex binary is present and, when it is, validates that a real
-//	config/batchWrite JSON-RPC call over stdio is accepted (no "null"
-//	rejection). When codex is absent the live gate skips cleanly.
+//	the codex binary is present and, when it is, requires correlated
+//	initialize, config/batchWrite, and config/read responses from its
+//	app-server. When codex is absent the live gate skips cleanly.
 //
 // Assertions (unit path — always run):
 //
@@ -53,10 +51,9 @@ package smokes
 //
 // Assertions (live gate — skipped when codex absent):
 //
-//   - TestCodexMCPConfigLiveGate: locates the codex binary, writes a
-//     minimal config/batchWrite JSON-RPC request to its stdin, and
-//     asserts the response does not contain the null-rejection error
-//     strings.
+//   - TestCodexMCPConfigLiveGate: locates the codex binary, uses a
+//     private config home, and requires a successful batchWrite plus
+//     effective readback of both MCP server entries.
 //
 // GATE: the live test skips when:
 //
@@ -69,9 +66,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -94,8 +94,9 @@ type codexMCPEntry struct {
 	Headers map[string]string `json:"headers,omitempty"`
 }
 
-// codexMCPBatchWriteParams mirrors the params object sent to codex
-// config/batchWrite when MCP servers are present.
+// codexMCPBatchWriteParams is the legacy envelope retained by the
+// transport/null shape checks. The live probe below uses Codex's native
+// edits/keyPath form instead.
 type codexMCPBatchWriteParams struct {
 	Updates []codexMCPKeyPath `json:"updates"`
 }
@@ -105,14 +106,12 @@ type codexMCPKeyPath struct {
 	Value   map[string]any `json:"value"`
 }
 
-// buildMCPBatchWriteBody constructs the JSON body of a config/batchWrite
-// request as the fixed mcpServersConfig would produce it, and returns the
-// marshaled bytes.
+// buildMCPBatchWriteBody constructs the independent transport/null shape
+// fixture and returns its marshaled bytes.
 func buildMCPBatchWriteBody(t *testing.T, entries map[string]codexMCPEntry) []byte {
 	t.Helper()
-	// Convert typed entries to map[string]any via JSON round-trip —
-	// exactly what the fixed mcpServersConfig does (marshal Server struct
-	// with omitempty, unmarshal into map[string]any).
+	// Convert typed entries to map[string]any via JSON round-trip so
+	// omitempty omissions are observable in the fixture.
 	anyEntries := make(map[string]any, len(entries))
 	for name, entry := range entries {
 		raw, err := json.Marshal(entry)
@@ -391,114 +390,320 @@ func codexBinaryGate(t *testing.T) string {
 	return p
 }
 
-// TestCodexMCPConfigLiveGate is the live counterpart: when the codex
-// binary is available, it sends a minimal config/batchWrite JSON-RPC
-// request to codex's stdio interface and asserts that codex does NOT
-// respond with the null-rejection error strings.
-//
-// The request carries:
-//   - One http-transport MCP server (type:"http", url, Authorization header).
-//   - One stdio MCP server with no args.
-//
-// These are the exact shapes that triggered the pre-fix failure.
-//
-// GATE: skipped (not failed) when codex is absent. See codexBinaryGate.
+// TestCodexMCPConfigLiveGate checks Codex's native config protocol. The
+// unit checks above retain the shared transport/null shape; this live path
+// uses Codex's native mcp_servers key and http_headers field. It does not
+// import or execute Donmai's production serializer.
 func TestCodexMCPConfigLiveGate(t *testing.T) {
 	codexBin := codexBinaryGate(t)
-	t.Logf("live gate: using codex binary at %s", codexBin)
-
-	// Build the config/batchWrite JSON-RPC request body — same shape
-	// the fixed mcpServersConfig would hand to codex over the stdio pipe.
-	entries := map[string]codexMCPEntry{
-		"platform-mcp": {
-			Type: "http",
-			URL:  "https://platform.example.com/api/mcp/session-smoke",
-			Headers: map[string]string{
-				"Authorization": "Bearer smoke-test-token",
-			},
-		},
-		"local-tools": {
-			Type:    "stdio",
-			Command: "echo", // simple always-present binary; codex won't spawn it
-			// Args: nil — the regression trigger shape.
-		},
-	}
-
-	mcpValue := make(map[string]any, len(entries))
-	for name, e := range entries {
-		raw, err := json.Marshal(e)
-		if err != nil {
-			t.Fatalf("marshal entry %q: %v", name, err)
-		}
-		var m map[string]any
-		if err := json.Unmarshal(raw, &m); err != nil {
-			t.Fatalf("unmarshal entry %q: %v", name, err)
-		}
-		mcpValue[name] = m
-	}
-
-	// JSON-RPC 2.0 config/batchWrite request (the exact call mcpServersConfig
-	// results in — codex reads it from stdin on the app-server interface).
-	type jsonRPCRequest struct {
-		JSONRPC string `json:"jsonrpc"`
-		ID      int    `json:"id"`
-		Method  string `json:"method"`
-		Params  any    `json:"params"`
-	}
-	req := jsonRPCRequest{
-		JSONRPC: "2.0",
-		ID:      1,
-		Method:  "config/batchWrite",
-		Params: map[string]any{
-			"updates": []map[string]any{
-				{"keyPath": "mcpServers", "value": mcpValue},
-			},
-		},
-	}
-	reqBytes, err := json.Marshal(req)
-	if err != nil {
-		t.Fatalf("marshal JSON-RPC request: %v", err)
-	}
-	// JSON-RPC over stdio: each request is a newline-terminated JSON object.
-	reqBytes = append(reqBytes, '\n')
-
-	t.Logf("live gate: sending config/batchWrite:\n%s", string(reqBytes))
-
-	// Spawn codex in app-server mode with a short timeout. We do NOT
-	// expect a full session — just that codex processes the batchWrite
-	// without emitting the null-rejection error.
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
+	if err := probeCodexMCPConfig(ctx, codexBin, t.TempDir()); err != nil {
+		t.Fatalf("live Codex MCP config protocol: %v", err)
+	}
+	t.Log("live gate: correlated batchWrite succeeded and config/read confirmed both servers")
+}
 
-	cmd := exec.CommandContext(ctx, codexBin, "app-server") //nolint:gosec
-	cmd.Stdin = bytes.NewReader(reqBytes)
+type codexProbeFrame struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id"`
+	Method  string          `json:"method"`
+	Result  json.RawMessage `json:"result"`
+	Error   *struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
+}
 
-	var outBuf bytes.Buffer
-	cmd.Stdout = &outBuf
-	cmd.Stderr = &outBuf
+type codexProbeRead struct {
+	frame codexProbeFrame
+	err   error
+}
 
-	// Run returns non-zero when codex exits (expected for an incomplete
-	// session); we only care about the output content.
-	_ = cmd.Run()
+const maxCodexProbeOutput = 64 << 10
 
-	output := outBuf.String()
-	t.Logf("live gate: codex output (first 2048 chars):\n%.2048s", output)
+// codexProbeCapture bounds diagnostic output. Truncation fails the probe so
+// a rejection string cannot disappear beyond the capture limit.
+type codexProbeCapture struct {
+	buf       bytes.Buffer
+	truncated bool
+}
 
-	// ── Assert: null-rejection strings must NOT appear ─────────────────
-	for _, bad := range []string{
-		"invalid type: null",
-		"expected any valid TOML value",
-		`"failureMode":"spawn-failed"`,
-		`failureMode: spawn-failed`,
-		"configure mcp servers",
-	} {
-		if strings.Contains(output, bad) {
-			t.Errorf("live gate: codex output contains null-rejection string %q — args:null regression is present\n--- full output ---\n%s",
-				bad, output)
+func (c *codexProbeCapture) Write(p []byte) (int, error) {
+	remaining := maxCodexProbeOutput - c.buf.Len()
+	if remaining > 0 {
+		_, _ = c.buf.Write(p[:min(len(p), remaining)])
+	}
+	if len(p) > remaining {
+		c.truncated = true
+	}
+	return len(p), nil
+}
+
+// probeCodexMCPConfig exercises only local app-server config RPCs. Every
+// process receives a fresh HOME/CODEX_HOME; the HTTP URL is loopback and no
+// thread, model turn, provider login, or MCP tool is started.
+func probeCodexMCPConfig(ctx context.Context, codexBin, base string) (retErr error) {
+	home := filepath.Join(base, "home")
+	codexHome := filepath.Join(home, ".codex")
+	for _, dir := range []string{codexHome, filepath.Join(home, "tmp"), filepath.Join(home, ".config")} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("create private Codex directory: %w", err)
+		}
+	}
+	configPath := filepath.Join(codexHome, "config.toml")
+	if err := os.WriteFile(configPath, []byte("mcp_servers = {}\n"), 0o600); err != nil {
+		return fmt.Errorf("write private Codex config: %w", err)
+	}
+	cmd := exec.CommandContext(ctx, codexBin, "app-server", "--stdio") //nolint:gosec // explicitly gated test executable
+	cmd.WaitDelay = 2 * time.Second
+	cmd.Dir = home
+	cmd.Env = []string{
+		"HOME=" + home, "CODEX_HOME=" + codexHome, "TMPDIR=" + filepath.Join(home, "tmp"),
+		"XDG_CONFIG_HOME=" + filepath.Join(home, ".config"), "PATH=/usr/bin:/bin",
+		"NO_COLOR=1", "TERM=dumb",
+	}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("open Codex stdin: %w", err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("open Codex stdout: %w", err)
+	}
+	var stdoutCapture, stderrCapture codexProbeCapture
+	cmd.Stderr = &stderrCapture
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start Codex app-server: %w", err)
+	}
+	frames := make(chan codexProbeRead, 16)
+	readDone := make(chan struct{})
+	stopReader := make(chan struct{})
+	go func() {
+		defer close(readDone)
+		dec := json.NewDecoder(io.TeeReader(io.LimitReader(stdout, maxCodexProbeOutput+1), &stdoutCapture))
+		for {
+			var frame codexProbeFrame
+			err := dec.Decode(&frame)
+			select {
+			case frames <- codexProbeRead{frame: frame, err: err}:
+			case <-stopReader:
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	defer func() {
+		_ = stdin.Close()
+		readerTimer := time.NewTimer(3 * time.Second)
+		defer readerTimer.Stop()
+		readerJoined := false
+		terminated := false
+		for !readerJoined {
+			select {
+			case <-readDone:
+				readerJoined = true
+			case <-frames:
+				// Drain notifications so the decoder can reach EOF before Wait.
+			case <-readerTimer.C:
+				close(stopReader)
+				_ = stdout.Close() // unblock Decode even if the child keeps the pipe open
+				if err := cmd.Process.Kill(); err == nil {
+					terminated = true
+				} else if !errors.Is(err, os.ErrProcessDone) {
+					retErr = errors.Join(retErr, fmt.Errorf("stop owned Codex app-server: %w", err))
+				}
+				select {
+				case <-readDone:
+					readerJoined = true
+				case <-time.After(2 * time.Second):
+					retErr = errors.Join(retErr, errors.New("Codex stdout reader did not stop"))
+				}
+				// The next step is bounded even when a pipe copier is stranded.
+				goto waitProcess
+			}
+		}
+	waitProcess:
+		wait := make(chan error, 1)
+		go func() { wait <- cmd.Wait() }()
+		waitJoined := false
+		select {
+		case err := <-wait:
+			waitJoined = true
+			if err != nil && !terminated {
+				retErr = errors.Join(retErr, fmt.Errorf("Codex app-server exit: %w", err))
+			}
+		case <-time.After(3 * time.Second):
+			_ = cmd.Process.Kill() // exact owned child; never wait unbounded
+			_ = stdout.Close()
+			retErr = errors.Join(retErr, errors.New("Codex app-server wait deadline exceeded"))
+		}
+		if !readerJoined || !waitJoined {
+			retErr = errors.Join(retErr, errors.New("Codex output writers were not joined"))
+			return
+		}
+		if stdoutCapture.truncated || stderrCapture.truncated {
+			retErr = errors.Join(retErr, errors.New("Codex output exceeded bounded capture"))
+		}
+		output := stdoutCapture.buf.String() + "\n" + stderrCapture.buf.String()
+		for _, bad := range []string{
+			"invalid type: null",
+			"expected any valid TOML value",
+			`"failureMode":"spawn-failed"`,
+			"failureMode: spawn-failed",
+			"configure mcp servers",
+		} {
+			if strings.Contains(output, bad) {
+				retErr = errors.Join(retErr, fmt.Errorf("Codex output contains forbidden rejection %q", bad))
+			}
+		}
+	}()
+
+	enc := json.NewEncoder(stdin)
+	request := func(id int, method string, params map[string]any) (json.RawMessage, error) {
+		if err := enc.Encode(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params}); err != nil {
+			return nil, fmt.Errorf("%s write: %w", method, err)
+		}
+		for {
+			if err := ctx.Err(); err != nil {
+				return nil, fmt.Errorf("%s response timeout: %w", method, err)
+			}
+			select {
+			case <-ctx.Done():
+				return nil, fmt.Errorf("%s response timeout: %w", method, ctx.Err())
+			case incoming := <-frames:
+				if incoming.err != nil {
+					if errors.Is(incoming.err, io.EOF) {
+						return nil, fmt.Errorf("%s: app-server closed output before response", method)
+					}
+					return nil, fmt.Errorf("%s: invalid response: %w", method, incoming.err)
+				}
+				frame := incoming.frame
+				if len(frame.ID) == 0 && frame.Method != "" {
+					continue // notification, not a reply to this request
+				}
+				if frame.JSONRPC != "" && frame.JSONRPC != "2.0" {
+					return nil, fmt.Errorf("%s: wrong JSON-RPC version %q", method, frame.JSONRPC)
+				}
+				if string(frame.ID) != fmt.Sprint(id) || frame.Method != "" {
+					return nil, fmt.Errorf("%s: mismatched response id/method", method)
+				}
+				if frame.Error != nil {
+					return nil, fmt.Errorf("%s: RPC error code %d", method, frame.Error.Code)
+				}
+				if len(frame.Result) == 0 || bytes.Equal(bytes.TrimSpace(frame.Result), []byte("null")) {
+					return nil, fmt.Errorf("%s: empty result", method)
+				}
+				return frame.Result, nil
+			}
 		}
 	}
 
-	t.Logf("live gate: no null-rejection strings in codex output — PASS")
+	if _, err := request(1, "initialize", map[string]any{
+		"clientInfo":   map[string]any{"name": "donmai-smoke", "version": "1"},
+		"capabilities": map[string]any{"experimentalApi": true},
+	}); err != nil {
+		return err
+	}
+	if err := enc.Encode(map[string]any{"jsonrpc": "2.0", "method": "initialized", "params": map[string]any{}}); err != nil {
+		return fmt.Errorf("initialized notification: %w", err)
+	}
+	servers := map[string]any{
+		"local-tools": map[string]any{"command": "/usr/bin/false"}, // args deliberately absent
+		"local-http": map[string]any{
+			"url": "http://127.0.0.1:9/mcp", "http_headers": map[string]any{"X-Fixture": "smoke"},
+		},
+	}
+	writeResult, err := request(2, "config/batchWrite", map[string]any{
+		"filePath": configPath, "reloadUserConfig": true,
+		"edits": []map[string]any{{"keyPath": "mcp_servers", "mergeStrategy": "replace", "value": servers}},
+	})
+	if err != nil {
+		return err
+	}
+	var writeAck struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(writeResult, &writeAck); err != nil || writeAck.Status != "ok" {
+		return fmt.Errorf("config/batchWrite: missing successful acknowledgement: %v", err)
+	}
+	readResult, err := request(3, "config/read", map[string]any{"includeLayers": true})
+	if err != nil {
+		return err
+	}
+	var readback struct {
+		Config struct {
+			MCPServers map[string]map[string]any `json:"mcp_servers"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(readResult, &readback); err != nil {
+		return fmt.Errorf("decode config/read: %w", err)
+	}
+	active := readback.Config.MCPServers
+	if len(active) != 2 || active["local-tools"]["command"] != "/usr/bin/false" ||
+		active["local-http"]["url"] != "http://127.0.0.1:9/mcp" {
+		return errors.New("config/read did not confirm both requested MCP servers")
+	}
+	if args, exists := active["local-tools"]["args"]; exists && args == nil {
+		return errors.New("config/read returned null stdio args")
+	}
+	header, ok := active["local-http"]["http_headers"].(map[string]any)
+	if !ok || header["X-Fixture"] != "smoke" {
+		return errors.New("config/read did not confirm HTTP header")
+	}
+	return nil
+}
+
+func TestCodexMCPProtocolRejectsBadReplies(t *testing.T) {
+	validReplies := `read line
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{}}'
+read line
+read line
+printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"status":"ok"}}'
+read line
+printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"config":{"mcp_servers":{"local-tools":{"command":"/usr/bin/false"},"local-http":{"url":"http://127.0.0.1:9/mcp","http_headers":{"X-Fixture":"smoke"}}}}}}'
+`
+	tests := []struct {
+		name, script, want string
+		timeout            time.Duration
+	}{
+		{name: "empty_exit", script: "read line\nexit 23\n", want: "closed output"},
+		{name: "rpc_error", script: "read line\nprintf '{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32603,\"message\":\"refused\"}}\\n'\n", want: "RPC error"},
+		{name: "mismatched_id", script: "read line\nprintf '{\"jsonrpc\":\"2.0\",\"id\":99,\"result\":{}}\\n'\n", want: "mismatched response"},
+		{name: "malformed", script: "read line\nprintf 'not-json\\n'\n", want: "invalid response"},
+		{name: "timeout", script: "read line\nread more\n", want: "response timeout", timeout: 300 * time.Millisecond},
+		{name: "notification_flood", script: "read line\nwhile :; do printf '{\"jsonrpc\":\"2.0\",\"method\":\"noise\"}\\n'; done\n", want: "output exceeded bounded capture", timeout: 3 * time.Second},
+		{name: "valid_then_nonzero_exit", script: validReplies + "exit 23\n", want: "exit status 23"},
+		{name: "valid_then_forbidden_stderr", script: validReplies + "printf 'invalid type: null' >&2\n", want: "forbidden rejection"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			base := t.TempDir()
+			bin := filepath.Join(base, "fake-codex")
+			if err := os.WriteFile(bin, []byte("#!/bin/sh\n"+tc.script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			timeout := tc.timeout
+			if timeout == 0 {
+				timeout = 3 * time.Second
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+			started := time.Now()
+			err := probeCodexMCPConfig(ctx, bin, base)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("probe error = %v, want %q", err, tc.want)
+			}
+			if tc.name == "notification_flood" && strings.Contains(err.Error(), "response timeout") {
+				t.Fatalf("flood reached deadline instead of reader output budget: %v", err)
+			}
+			if elapsed := time.Since(started); elapsed > 8*time.Second {
+				t.Fatalf("probe cleanup exceeded bound: %s", elapsed)
+			}
+		})
+	}
 }
 
 // ── Helper ────────────────────────────────────────────────────────────────────
