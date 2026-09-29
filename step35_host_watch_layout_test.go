@@ -27,9 +27,10 @@ const (
 )
 
 type watchCapture struct {
-	mu     sync.Mutex
-	raw    bytes.Buffer
-	notify chan struct{}
+	columns int
+	mu      sync.Mutex
+	raw     bytes.Buffer
+	notify  chan struct{}
 }
 
 func (c *watchCapture) append(data []byte) {
@@ -51,10 +52,10 @@ func (c *watchCapture) snapshot() []byte {
 // watchScreen applies the terminal's cursor/erase operations to one current
 // screen. Searching the accumulated PTY transcript would let a stale frame
 // satisfy a check after a split or selection key.
-func watchScreen(raw []byte) []string {
+func watchScreen(raw []byte, columns int) []string {
 	cells := make([][]rune, watchRows)
 	for row := range cells {
-		cells[row] = []rune(strings.Repeat(" ", watchColumns))
+		cells[row] = []rune(strings.Repeat(" ", columns))
 	}
 	x, y := 0, 0
 	clamp := func(value, maximum int) int {
@@ -68,7 +69,7 @@ func watchScreen(raw []byte) []string {
 	}
 	scroll := func() {
 		copy(cells, cells[1:])
-		cells[watchRows-1] = []rune(strings.Repeat(" ", watchColumns))
+		cells[watchRows-1] = []rune(strings.Repeat(" ", columns))
 		y = watchRows - 1
 	}
 	runes := []rune(string(raw))
@@ -100,23 +101,23 @@ func watchScreen(raw []byte) []string {
 				}
 				switch runes[i] {
 				case 'H', 'f':
-					y, x = clamp(num(0, 1)-1, watchRows), clamp(num(1, 1)-1, watchColumns)
+					y, x = clamp(num(0, 1)-1, watchRows), clamp(num(1, 1)-1, columns)
 				case 'd':
 					y = clamp(num(0, 1)-1, watchRows)
 				case 'G':
-					x = clamp(num(0, 1)-1, watchColumns)
+					x = clamp(num(0, 1)-1, columns)
 				case 'A':
 					y = clamp(y-num(0, 1), watchRows)
 				case 'B':
 					y = clamp(y+num(0, 1), watchRows)
 				case 'C':
-					x = clamp(x+num(0, 1), watchColumns)
+					x = clamp(x+num(0, 1), columns)
 				case 'D':
-					x = clamp(x-num(0, 1), watchColumns)
+					x = clamp(x-num(0, 1), columns)
 				case 'J':
 					if num(0, 0) == 2 {
 						for row := range cells {
-							cells[row] = []rune(strings.Repeat(" ", watchColumns))
+							cells[row] = []rune(strings.Repeat(" ", columns))
 						}
 					}
 				case 'K':
@@ -125,23 +126,23 @@ func watchScreen(raw []byte) []string {
 							cells[y][col] = ' '
 						}
 					} else {
-						for col := x; col < watchColumns; col++ {
+						for col := x; col < columns; col++ {
 							cells[y][col] = ' '
 						}
 					}
 				case 'X':
-					for col := x; col < x+num(0, 1) && col < watchColumns; col++ {
+					for col := x; col < x+num(0, 1) && col < columns; col++ {
 						cells[y][col] = ' '
 					}
 				case 'M':
 					for range num(0, 1) {
 						copy(cells[y:], cells[y+1:])
-						cells[watchRows-1] = []rune(strings.Repeat(" ", watchColumns))
+						cells[watchRows-1] = []rune(strings.Repeat(" ", columns))
 					}
 				case 'L':
 					for range num(0, 1) {
 						copy(cells[y+1:], cells[y:watchRows-1])
-						cells[y] = []rune(strings.Repeat(" ", watchColumns))
+						cells[y] = []rune(strings.Repeat(" ", columns))
 					}
 				}
 			case ']':
@@ -170,12 +171,12 @@ func watchScreen(raw []byte) []string {
 				scroll()
 			}
 		case '\b':
-			x = clamp(x-1, watchColumns)
+			x = clamp(x-1, columns)
 		default:
 			if r < ' ' || r == '\x7f' {
 				continue
 			}
-			if x >= watchColumns {
+			if x >= columns {
 				x = 0
 				y++
 				if y >= watchRows {
@@ -206,19 +207,33 @@ func waitWatchScreen(c *watchCapture, predicate func([]string) bool) ([]string, 
 	deadline := time.NewTimer(8 * time.Second)
 	defer deadline.Stop()
 	for {
-		lines := watchScreen(c.snapshot())
+		lines := watchScreen(c.snapshot(), c.columns)
 		if predicate(lines) {
 			return lines, true
 		}
 		select {
 		case <-c.notify:
 		case <-deadline.C:
-			return watchScreen(c.snapshot()), false
+			return watchScreen(c.snapshot(), c.columns), false
 		}
 	}
 }
 
-func startWatchPTY(t *testing.T, binary, cwd, home, daemonURL string, args ...string) (*os.File, *watchCapture, func()) {
+// The identity assertions require the full host and optional project label.
+// Size that scenario to fit those labels beside the fixture's counters rather
+// than depending on the runner's hostname fitting a fixed 120-column header.
+// Hostname bytes conservatively bound display cells without a new dependency.
+func watchFixtureColumns(host, scope string) int {
+	identityColumns := len(host)
+	if scope != "" {
+		identityColumns += len(" · " + scope)
+	}
+	counterColumns := len("1 running   queue 0   uptime 1m 30s   v0.72.26")
+	const paddingAndGap = 3 // one padding cell per side and one gap
+	return max(watchColumns, identityColumns+counterColumns+paddingAndGap)
+}
+
+func startWatchPTY(t *testing.T, binary, cwd, home, daemonURL string, columns int, args ...string) (*os.File, *watchCapture, func()) {
 	t.Helper()
 	cmd := exec.Command(binary, append([]string{"host", "watch"}, args...)...) //nolint:gosec // compiled SUT and fixed local fixture args
 	cmd.Dir = cwd
@@ -228,11 +243,15 @@ func startWatchPTY(t *testing.T, binary, cwd, home, daemonURL string, args ...st
 		"XDG_CONFIG_HOME=" + filepath.Join(home, ".config"),
 		"PATH=/usr/bin:/bin", "LANG=C.UTF-8", "TERM=xterm", "NO_COLOR=1",
 	}
-	terminal, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: watchRows, Cols: watchColumns})
+	if columns < 1 || columns > 65535 {
+		t.Fatalf("invalid host-watch fixture width: %d", columns)
+	}
+	t.Logf("host-watch PTY fixture columns=%d", columns)
+	terminal, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: watchRows, Cols: uint16(columns)})
 	if err != nil {
 		t.Fatalf("start compiled host watch in PTY: %v", err)
 	}
-	capture := &watchCapture{notify: make(chan struct{}, 1)}
+	capture := &watchCapture{columns: columns, notify: make(chan struct{}, 1)}
 	readerDone := make(chan struct{})
 	go func() {
 		defer close(readerDone)
@@ -373,7 +392,7 @@ func TestHostWatchLayoutFromCompiledCLI(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Run("default project scope", func(t *testing.T) {
-		_, capture, quit := startWatchPTY(t, binary, cwd, home, daemon.URL)
+		_, capture, quit := startWatchPTY(t, binary, cwd, home, daemon.URL, watchFixtureColumns(host, "fixture/alpha"))
 		lines, ok := waitWatchScreen(capture, func(lines []string) bool {
 			return watchRow(lines, "watch-a-") >= 0 && watchRow(lines, "1 running") >= 0
 		})
@@ -394,7 +413,7 @@ func TestHostWatchLayoutFromCompiledCLI(t *testing.T) {
 		quit()
 	})
 	t.Run("fleet grid split and selection", func(t *testing.T) {
-		terminal, capture, quit := startWatchPTY(t, binary, cwd, home, daemon.URL, "--all")
+		terminal, capture, quit := startWatchPTY(t, binary, cwd, home, daemon.URL, watchFixtureColumns(host, ""), "--all")
 		lines, ok := waitWatchScreen(capture, func(lines []string) bool {
 			return watchRow(lines, "watch-a-") >= 0 && watchRow(lines, "watch-b-") >= 0 && watchRow(lines, "FOLLOW") >= 0
 		})
