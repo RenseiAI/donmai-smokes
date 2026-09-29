@@ -224,7 +224,7 @@ func TestAfDaemonKitLifecycleHonestEndToEnd(t *testing.T) {
 	// root, runs the verifier (no sibling .sigstore → trust=unsigned),
 	// gate allows under permissive mode, persists into kitScanDir.
 	{
-		installURL := live.URL + "/api/daemon/kits/" + kitLifecycleID + "/install"
+		installPath := "/api/daemon/kits/" + kitLifecycleID + "/install"
 		body := map[string]any{
 			"source": map[string]any{
 				"kind": "git",
@@ -238,11 +238,10 @@ func TestAfDaemonKitLifecycleHonestEndToEnd(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, installURL, bytes.NewReader(bodyBytes))
+		req, err := live.NewRequest(ctx, http.MethodPost, installPath, bytes.NewReader(bodyBytes))
 		if err != nil {
 			t.Fatalf("build install request: %v", err)
 		}
-		req.Header.Set("Content-Type", "application/json")
 
 		resp, err := httpClient.Do(req)
 		if err != nil {
@@ -475,7 +474,7 @@ func TestAfDaemonKitLifecycleHonestEndToEnd(t *testing.T) {
 
 	// ─── 5a. Allowlist rejects unsigned install ────────────────────────
 	{
-		installURL := allowLive.URL + "/api/daemon/kits/" + kitLifecycleID + "/install"
+		installPath := "/api/daemon/kits/" + kitLifecycleID + "/install"
 		body := map[string]any{
 			"source": map[string]any{
 				"kind": "git",
@@ -489,11 +488,10 @@ func TestAfDaemonKitLifecycleHonestEndToEnd(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, installURL, bytes.NewReader(bodyBytes))
+		req, err := allowLive.NewRequest(ctx, http.MethodPost, installPath, bytes.NewReader(bodyBytes))
 		if err != nil {
 			t.Fatalf("build allowlist install request: %v", err)
 		}
-		req.Header.Set("Content-Type", "application/json")
 
 		resp, err := httpClient.Do(req)
 		if err != nil {
@@ -540,7 +538,7 @@ func TestAfDaemonKitLifecycleHonestEndToEnd(t *testing.T) {
 	// assert only the HTTP 200 here because the audit log goes through
 	// the daemon's slog sink, not the wire response.
 	{
-		installURL := allowLive.URL + "/api/daemon/kits/" + kitLifecycleID + "/install"
+		installPath := "/api/daemon/kits/" + kitLifecycleID + "/install"
 		body := map[string]any{
 			"source": map[string]any{
 				"kind": "git",
@@ -555,11 +553,10 @@ func TestAfDaemonKitLifecycleHonestEndToEnd(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, installURL, bytes.NewReader(bodyBytes))
+		req, err := allowLive.NewRequest(ctx, http.MethodPost, installPath, bytes.NewReader(bodyBytes))
 		if err != nil {
 			t.Fatalf("build override install request: %v", err)
 		}
-		req.Header.Set("Content-Type", "application/json")
 
 		resp, err := httpClient.Do(req)
 		if err != nil {

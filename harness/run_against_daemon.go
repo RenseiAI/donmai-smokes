@@ -31,6 +31,14 @@ type HermeticRunOptions struct {
 	// the binary should target for /api/daemon/* requests. Required.
 	DaemonURL string
 
+	// ControlTokenFile, when non-empty, is exported to the subprocess as
+	// DONMAI_CONTROL_TOKEN_FILE so a CLI whose HOME differs from the
+	// daemon's still authenticates its mutating control-API calls. Pass
+	// LiveDaemon.ControlTokenFile(). Only the path travels; the CLI reads
+	// the token itself. A binary that predates the control token ignores
+	// the variable, and an absent file means no credential is sent.
+	ControlTokenFile string
+
 	// ExtraEnv is appended after the default hermetic env (PATH, HOME,
 	// XDG_CONFIG_HOME, the DaemonURL pair, NO_COLOR=1). Useful for
 	// unsetting platform credentials with empty assignments
@@ -50,6 +58,7 @@ type HermeticRunOptions struct {
 //	XDG_CONFIG_HOME=<HomeDir>/.config
 //	<DaemonURLEnvVar>=<DaemonURL>
 //	NO_COLOR=1
+//	DONMAI_CONTROL_TOKEN_FILE=<ControlTokenFile>   (only when set)
 //	<ExtraEnv...>
 //
 // The point of the hermetic shape: the subprocess can't accidentally pick
@@ -79,6 +88,9 @@ func RunHermeticAgainstDaemon(ctx context.Context, opts HermeticRunOptions) (str
 		"XDG_CONFIG_HOME=" + filepath.Join(opts.HomeDir, ".config"),
 		opts.DaemonURLEnvVar + "=" + opts.DaemonURL,
 		"NO_COLOR=1",
+	}
+	if opts.ControlTokenFile != "" {
+		env = append(env, ControlTokenFileEnv+"="+opts.ControlTokenFile)
 	}
 	env = append(env, opts.ExtraEnv...)
 	cmd.Env = env
