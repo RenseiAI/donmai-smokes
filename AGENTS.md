@@ -75,6 +75,7 @@ each result line in your report.
 - `harness/build.go` — `BuildBinary`: `go build` from an explicit SourceDir. Prefer `RequireDonmaiBinary`.
 - `harness/live_daemon.go` — `LiveDaemonWithConfig`: spawn + healthz-wait, optional daemon.yaml pre-write.
 - `harness/daemon_detect.go` — `DaemonAvailable`: probe daemon reachability.
+- `harness/control_token.go` — the daemon control-token seam. Build live-daemon requests with `LiveDaemon.NewRequest` (required for mutating calls): mutating (non-GET) calls carry the daemon's bearer token when it minted one, GET never does, and a daemon without a token file gets no header. A CLI subprocess whose HOME differs from the daemon's gets the token PATH via `HermeticRunOptions.ControlTokenFile: live.ControlTokenFile()`. Never log the token.
 - `harness/runner.go` — `Runner`: subprocess executor (dry-run, verbose, timeout, binary override).
 - `harness/help_parser.go` — `ParseHelpSubcommands`: parse Cobra `--help` Available Commands.
 - `harness/errors.go` — `WrapStep`/`StepError` step-context wrapping + `IsUnknownSubcommand`.

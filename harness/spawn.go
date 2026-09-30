@@ -4,10 +4,13 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -79,6 +82,12 @@ type LiveDaemon struct {
 	// pure field read with no string-parsing on hot paths.
 	port int
 
+	// controlTokenFile is where the spawned daemon keeps its control-API
+	// bearer token, resolved from the exact env it was started with. The
+	// file itself is read lazily per request (see NewRequest); a daemon
+	// that predates the token never writes it.
+	controlTokenFile string
+
 	// stopOnce guards the actual stop sequence so Stop is safe to call
 	// multiple times; subsequent calls return without side effects.
 	stopOnce sync.Once
@@ -106,6 +115,36 @@ func (d *LiveDaemon) Stop() {
 // returning a LiveDaemon).
 func (d *LiveDaemon) Port() int {
 	return d.port
+}
+
+// ControlTokenFile returns the path of the spawned daemon's control-token
+// file ("" when the daemon env resolves none). Pass it as
+// HermeticRunOptions.ControlTokenFile so a CLI subprocess with its own HOME
+// authenticates its mutating calls against this daemon. The file may not
+// exist: a daemon that predates the control token never writes one.
+func (d *LiveDaemon) ControlTokenFile() string {
+	return d.controlTokenFile
+}
+
+// NewRequest builds a request against the daemon's /api/daemon/* control
+// API. path is appended to URL; a non-nil body is sent as JSON. Every
+// mutating (non-GET) request carries `Authorization: Bearer <token>` read
+// from ControlTokenFile when the daemon minted one; GET requests and
+// requests to a daemon without a token file carry no credential, exactly
+// as before the control token existed. Build every mutating daemon call
+// here rather than hand-building a request against URL.
+func (d *LiveDaemon) NewRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(d.URL, "/")+path, body)
+	if err != nil {
+		return nil, fmt.Errorf("build daemon request %s %s: %w", method, path, err)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if err := AttachControlToken(req, d.controlTokenFile); err != nil {
+		return nil, fmt.Errorf("daemon request %s %s: %w", method, path, err)
+	}
+	return req, nil
 }
 
 // SpawnDaemon spawns a daemon child process per the supplied SpawnOptions
@@ -206,11 +245,19 @@ func SpawnDaemon(ctx context.Context, opts SpawnOptions) (*LiveDaemon, error) {
 		return nil, fmt.Errorf("daemon /healthz never returned 200: %w", err)
 	}
 
+	// The child sees cmd.Env, or this process's env when that is nil;
+	// resolve the token path from the same view the daemon resolved it.
+	daemonEnv := cmd.Env
+	if daemonEnv == nil {
+		daemonEnv = os.Environ()
+	}
+
 	return &LiveDaemon{
-		Cmd:    cmd,
-		URL:    opts.HealthzBaseURL,
-		port:   port,
-		stopFn: stopFn,
+		Cmd:              cmd,
+		URL:              opts.HealthzBaseURL,
+		port:             port,
+		controlTokenFile: ControlTokenFileFromEnv(daemonEnv),
+		stopFn:           stopFn,
 	}, nil
 }
 

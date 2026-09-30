@@ -229,12 +229,11 @@ autoUpdate:
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-			live.URL+"/api/daemon/sessions", bytes.NewReader(specBytes))
+		req, err := live.NewRequest(ctx, http.MethodPost,
+			"/api/daemon/sessions", bytes.NewReader(specBytes))
 		if err != nil {
 			t.Fatalf("build accept-work request: %v", err)
 		}
-		req.Header.Set("Content-Type", "application/json")
 		resp, err := httpClient.Do(req)
 		if err != nil {
 			t.Fatalf("POST /api/daemon/sessions: %v\n--- daemon log tail ---\n%s", err, logBuf.String())

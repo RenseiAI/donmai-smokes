@@ -135,9 +135,12 @@ func TestKitTrustEnvPolicyThroughCLI(t *testing.T) {
 				t.Helper()
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer cancel()
+				// The CLI's own HOME differs from the daemon's, so hand it
+				// the daemon's control-token path: `kit install` mutates.
 				return afh.RunHermeticAgainstDaemon(ctx, afh.HermeticRunOptions{
 					Binary: bin, Args: args, HomeDir: t.TempDir(),
 					DaemonURLEnvVar: "DONMAI_DAEMON_URL", DaemonURL: live.URL,
+					ControlTokenFile: live.ControlTokenFile(),
 				})
 			}
 			output, installErr := runKit(args...)

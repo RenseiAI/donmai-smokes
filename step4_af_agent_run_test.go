@@ -132,12 +132,13 @@ autoUpdate:
 
 	postCtx, postCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer postCancel()
-	postReq, err := http.NewRequestWithContext(postCtx, http.MethodPost,
-		live.URL+"/api/daemon/sessions", bytes.NewReader(specBytes))
+	// LiveDaemon.NewRequest attaches the daemon's control token (when it
+	// minted one) — accept-work is a mutating control route.
+	postReq, err := live.NewRequest(postCtx, http.MethodPost,
+		"/api/daemon/sessions", bytes.NewReader(specBytes))
 	if err != nil {
 		t.Fatalf("build accept-work request: %v", err)
 	}
-	postReq.Header.Set("Content-Type", "application/json")
 
 	postResp, err := httpClient.Do(postReq)
 	if err != nil {
