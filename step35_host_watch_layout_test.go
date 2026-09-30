@@ -233,6 +233,15 @@ func watchFixtureColumns(host, scope string) int {
 	return max(watchColumns, identityColumns+counterColumns+paddingAndGap)
 }
 
+// Hostnames and the fixture counters are ASCII, so bytes give a conservative
+// display-cell budget without adding a terminal-width dependency. The styled
+// header keeps two padding cells and one gap before the counter group.
+func watchQueueFitsCompleteHost(host string, columns int) bool {
+	const paddingAndGap = 3
+	const primaryAndQueue = "2 running   queue 0"
+	return len(host)+paddingAndGap+len(primaryAndQueue) <= columns
+}
+
 func startWatchPTY(t *testing.T, binary, cwd, home, daemonURL string, columns int, args ...string) (*os.File, *watchCapture, func()) {
 	t.Helper()
 	cmd := exec.Command(binary, append([]string{"host", "watch"}, args...)...) //nolint:gosec // compiled SUT and fixed local fixture args
@@ -424,8 +433,17 @@ func TestHostWatchLayoutFromCompiledCLI(t *testing.T) {
 				if got := len([]rune(lines[0])); got > tc.columns {
 					t.Errorf("width %d header occupies %d cells: %q", tc.columns, got, lines[0])
 				}
-				if watchRow(lines, tc.running) != 0 || watchRow(lines, "queue 0") != 0 {
-					t.Errorf("width %d header and counters did not stay on one visible row: %q", tc.columns, lines[:3])
+				if watchRow(lines, tc.running) != 0 {
+					t.Errorf("width %d header lost the primary running counter from row zero: %q", tc.columns, lines[:3])
+				}
+				queueRow := watchRow(lines, "queue 0")
+				queueFits := watchQueueFitsCompleteHost(host, tc.columns)
+				t.Logf("queue capacity witness: host_cells=%d width=%d queue_fits=%t", len(host), tc.columns, queueFits)
+				if queueFits && queueRow != 0 {
+					t.Errorf("width %d header omitted queue counter despite complete host and primary/queue counters fitting: %q", tc.columns, lines[:3])
+				}
+				if !queueFits && queueRow >= 0 {
+					t.Errorf("width %d header showed queue counter although complete host and primary/queue counters do not fit: row=%d screen=%q", tc.columns, queueRow, lines[:3])
 				}
 				for row, line := range lines[1:] {
 					if strings.Contains(line, "uptime") || strings.Contains(line, "v0.72.26") || strings.Contains(line, "72.26") {
