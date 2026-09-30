@@ -233,6 +233,15 @@ func watchFixtureColumns(host, scope string) int {
 	return max(watchColumns, identityColumns+counterColumns+paddingAndGap)
 }
 
+// Hostnames and the fixture counters are ASCII, so bytes give a conservative
+// display-cell budget without adding a terminal-width dependency. The styled
+// header keeps two padding cells and one gap before the counter group.
+func watchQueueFitsCompleteHost(host string, columns int) bool {
+	const paddingAndGap = 3
+	const primaryAndQueue = "2 running   queue 0"
+	return len(host)+paddingAndGap+len(primaryAndQueue) <= columns
+}
+
 func startWatchPTY(t *testing.T, binary, cwd, home, daemonURL string, columns int, args ...string) (*os.File, *watchCapture, func()) {
 	t.Helper()
 	cmd := exec.Command(binary, append([]string{"host", "watch"}, args...)...) //nolint:gosec // compiled SUT and fixed local fixture args
@@ -391,6 +400,67 @@ func TestHostWatchLayoutFromCompiledCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	hostRunes := []rune(host)
+	if len(hostRunes) == 0 {
+		hostRunes = []rune("host")
+	}
+	visibleHostPrefix := string(hostRunes[:min(6, len(hostRunes))])
+	t.Run("header fits narrow and wider viewports", func(t *testing.T) {
+		tests := []struct {
+			name       string
+			columns    int
+			args       []string
+			running    string
+			fullHeader bool
+		}{
+			{name: "narrow_40", columns: 40, args: []string{"--all"}, running: "2 running"},
+			{name: "medium_80", columns: 80, args: []string{"--all"}, running: "2 running"},
+			{name: "wide_context_fits", columns: watchFixtureColumns(host, "fixture/alpha") + 8, running: "1 running", fullHeader: true},
+		}
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				_, capture, quit := startWatchPTY(t, binary, cwd, home, daemon.URL, tc.columns, tc.args...)
+				lines, ok := waitWatchScreen(capture, func(lines []string) bool {
+					return watchRow(lines, "watch-a-") >= 0 && watchRow(lines, tc.running) >= 0
+				})
+				if !ok {
+					t.Fatalf("host header and session did not render at width %d: %q", tc.columns, lines[:3])
+				}
+				header := strings.TrimSpace(lines[0])
+				if !strings.HasPrefix(header, visibleHostPrefix) {
+					t.Errorf("width %d header lost visible host prefix %q: %q", tc.columns, visibleHostPrefix, lines[0])
+				}
+				if got := len([]rune(lines[0])); got > tc.columns {
+					t.Errorf("width %d header occupies %d cells: %q", tc.columns, got, lines[0])
+				}
+				if watchRow(lines, tc.running) != 0 {
+					t.Errorf("width %d header lost the primary running counter from row zero: %q", tc.columns, lines[:3])
+				}
+				queueRow := watchRow(lines, "queue 0")
+				queueFits := watchQueueFitsCompleteHost(host, tc.columns)
+				t.Logf("queue capacity witness: host_cells=%d width=%d queue_fits=%t", len(host), tc.columns, queueFits)
+				if queueFits && queueRow != 0 {
+					t.Errorf("width %d header omitted queue counter despite complete host and primary/queue counters fitting: %q", tc.columns, lines[:3])
+				}
+				if !queueFits && queueRow >= 0 {
+					t.Errorf("width %d header showed queue counter although complete host and primary/queue counters do not fit: row=%d screen=%q", tc.columns, queueRow, lines[:3])
+				}
+				for row, line := range lines[1:] {
+					if strings.Contains(line, "uptime") || strings.Contains(line, "v0.72.26") || strings.Contains(line, "72.26") {
+						t.Errorf("width %d header continued onto viewport row %d: %q", tc.columns, row+1, line)
+					}
+				}
+				if tc.fullHeader {
+					for _, field := range []string{host, "fixture/alpha", "queue 0", "uptime", "v0.72.26"} {
+						if !strings.Contains(lines[0], field) {
+							t.Errorf("fitting width %d header omitted %q: %q", tc.columns, field, lines[0])
+						}
+					}
+				}
+				quit()
+			})
+		}
+	})
 	t.Run("default project scope", func(t *testing.T) {
 		_, capture, quit := startWatchPTY(t, binary, cwd, home, daemon.URL, watchFixtureColumns(host, "fixture/alpha"))
 		lines, ok := waitWatchScreen(capture, func(lines []string) bool {
