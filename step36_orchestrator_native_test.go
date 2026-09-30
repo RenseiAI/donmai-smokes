@@ -198,6 +198,9 @@ printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"te
 if [ -n "${SMOKE_PROVIDER_STARTED_DIR:-}" ]; then
   : > "$SMOKE_PROVIDER_STARTED_DIR/$issue"
 fi
+if [ "$issue" = "OSS-MUTATE" ]; then
+  git -C "$SMOKE_PROVIDER_GIT_DIR" remote set-url origin "https://example.test/changed/repo.git"
+fi
 if [ -n "${SMOKE_PROVIDER_RELEASE_FILE:-}" ]; then
   attempts=0
   while [ ! -f "$SMOKE_PROVIDER_RELEASE_FILE" ] && [ "$attempts" -lt 500 ]; do
@@ -265,6 +268,7 @@ func startOrchestratorCLI(t *testing.T, consumer, workDir, fixtureURL, providerD
 		"SMOKE_PROVIDER_FINISHED_DIR=" + finishedDir,
 		"SMOKE_PROVIDER_MODE_DIR=" + modeDir,
 		"SMOKE_PROVIDER_PID_DIR=" + pidDir,
+		"SMOKE_PROVIDER_GIT_DIR=" + workDir,
 	}
 	if releaseFile != "" {
 		cmd.Env = append(cmd.Env, "SMOKE_PROVIDER_RELEASE_FILE="+releaseFile)
@@ -496,6 +500,57 @@ func TestOrchestratorBacklogAwaitsEachProviderAndReportsFailure(t *testing.T) {
 	}
 	if !strings.Contains(output, "completed") || !strings.Contains(output, "controlled provider terminal failure") || !strings.Contains(output, "error_max_turns") {
 		t.Fatalf("backlog summary did not preserve the successful and failed terminal outcomes (err=%v):\n%s", err, output)
+	}
+}
+
+func TestOrchestratorBacklogRevalidatesRepositoryBeforeProviderSpawn(t *testing.T) {
+	consumer, workDir := setupOrchestratorConsumer(t)
+	remote := "https://example.test/expected/repo.git"
+	addRemote := exec.Command("git", "remote", "add", "origin", remote) //nolint:gosec // fixed executable and fixture URL.
+	addRemote.Dir = workDir
+	if output, err := addRemote.CombinedOutput(); err != nil {
+		t.Fatalf("set isolated fixture origin: %v\n%s", err, output)
+	}
+	initialOrigin := exec.Command("git", "remote", "get-url", "origin") //nolint:gosec // fixed executable and arguments.
+	initialOrigin.Dir = workDir
+	initialOutput, initialErr := initialOrigin.Output()
+	if initialErr != nil || strings.TrimSpace(string(initialOutput)) != remote {
+		t.Fatalf("initial fixture origin = %q, want %q (error %v)", strings.TrimSpace(string(initialOutput)), remote, initialErr)
+	}
+	providerDir, startedDir, terminalDir, finishedDir, modeDir, pidDir, _ := writeOrchestratorFixtures(t)
+	server := newOrchestratorFixtureServer(t,
+		fixtureIssue{id: "issue-1", identifier: "OSS-MUTATE", title: "Change private origin"},
+		fixtureIssue{id: "issue-2", identifier: "OSS-SECOND", title: "Must not start"},
+	)
+	process := startOrchestratorCLI(t, consumer, workDir, server.URL, providerDir, startedDir, terminalDir, finishedDir, modeDir, pidDir, "", "--project", "Example", "--max", "1", "--repo", remote)
+	waitForMarker(t, startedDir, "OSS-MUTATE", "first provider start")
+	waitForMarker(t, terminalDir, "OSS-MUTATE", "first provider terminal")
+	waitForMarker(t, finishedDir, "OSS-MUTATE", "first provider finish")
+	waitForProviderExit(t, pidDir, "OSS-MUTATE")
+	err := process.wait(t)
+	output := process.output(t)
+	origin := exec.Command("git", "remote", "get-url", "origin") //nolint:gosec // fixed executable and arguments.
+	origin.Dir = workDir
+	originOutput, originErr := origin.Output()
+	if originErr != nil || strings.TrimSpace(string(originOutput)) != "https://example.test/changed/repo.git" {
+		t.Fatalf("first fixture provider did not change only its private origin: got=%q err=%v", strings.TrimSpace(string(originOutput)), originErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(startedDir, "OSS-SECOND")); statErr == nil {
+		waitForMarker(t, terminalDir, "OSS-SECOND", "second provider terminal")
+		waitForMarker(t, finishedDir, "OSS-SECOND", "second provider finish")
+		waitForProviderExit(t, pidDir, "OSS-SECOND")
+	}
+	if err == nil {
+		t.Fatalf("CLI succeeded after the first provider changed the private git origin (mode=%s):\n%s", readMarker(t, modeDir, "OSS-MUTATE"), output)
+	}
+	if got := readMarker(t, modeDir, "OSS-MUTATE"); got != "native" {
+		t.Fatalf("successful candidate used provider invocation mode %q, want native", got)
+	}
+	if _, statErr := os.Stat(filepath.Join(startedDir, "OSS-SECOND")); statErr == nil {
+		t.Fatalf("second provider started after the repository origin changed:\n%s", output)
+	}
+	if !strings.Contains(output, "repository mismatch") || !strings.Contains(output, "changed/repo") {
+		t.Fatalf("CLI did not report the per-dispatch repository mismatch (err=%v):\n%s", err, output)
 	}
 }
 
