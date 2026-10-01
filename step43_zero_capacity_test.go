@@ -35,7 +35,13 @@ import (
  "time"
  "github.com/RenseiAI/donmai/afclient"
  "github.com/RenseiAI/donmai/daemon"
+ "gopkg.in/yaml.v3"
 )
+func member(node *yaml.Node,key string) *yaml.Node {
+ if node.Kind==yaml.DocumentNode {node=node.Content[0]}
+ for i:=0;i+1<len(node.Content);i+=2{if node.Content[i].Value==key{return node.Content[i+1]}}
+ return &yaml.Node{}
+}
 func worker(root string) error {
  id:=os.Getenv("DONMAI_SESSION_ID")
  if id!="capacity-first"&&id!="capacity-second"{return fmt.Errorf("unexpected fixture session")}
@@ -59,6 +65,12 @@ func worker(root string) error {
 func run() error {
  if os.Args[1]=="worker"{return worker(os.Args[2])}
  if os.Args[1]=="load"{cfg,err:=daemon.LoadConfig(os.Args[2]);if err!=nil{return err};return json.NewEncoder(os.Stdout).Encode(cfg.Capacity)}
+ if os.Args[1]=="yaml-values"{
+  raw,err:=os.ReadFile(os.Args[2]);if err!=nil{return err}
+  var values map[string]any;if err:=yaml.Unmarshal(raw,&values);err!=nil{return err}
+  var node yaml.Node;if err:=yaml.Unmarshal(raw,&node);err!=nil{return err}
+  return json.NewEncoder(os.Stdout).Encode(map[string]any{"values":values,"capacityAnchor":member(member(&node,"capacity"),"maxConcurrentSessions").Anchor,"observerAlias":member(&node,"observer").Value,"defaultAnchor":member(&node,"defaultLimit").Anchor})
+ }
  port,err:=strconv.Atoi(os.Args[3]);if err!=nil{return err}
  root:=os.Args[4]
  token,err:=afclient.EnsureControlToken(filepath.Join(root,".donmai","control-token"));if err!=nil{return err}
@@ -313,7 +325,17 @@ func TestZeroCapacityStartupAndCLI(t *testing.T) {
 			t.Fatalf("negative accepted or wrong refusal: %v %s", err, out)
 		}
 	})
-	for _, fixture := range []struct{ name, yaml string }{{"cli-positive-to-zero", "capacity: {maxConcurrentSessions: 3}\n"}, {"cli-omitted-to-zero", ""}} {
+	for _, fixture := range []struct {
+		name, yaml                    string
+		checkAnchors                  bool
+		wantObserver                  int
+		capacityAnchor, defaultAnchor string
+	}{
+		{name: "cli-positive-to-zero", yaml: "capacity: {maxConcurrentSessions: 3}\n"},
+		{name: "cli-omitted-to-zero"},
+		{name: "cli-local-scalar-anchor", yaml: "capacity:\n  maxConcurrentSessions: &limit 3\nobserver: *limit\n", checkAnchors: true, wantObserver: 0, capacityAnchor: "limit"},
+		{name: "cli-external-scalar-anchor", yaml: "defaultLimit: &limit 3\ncapacity:\n  maxConcurrentSessions: *limit\nobserver: *limit\n", checkAnchors: true, wantObserver: 3, defaultAnchor: "limit"},
+	} {
 		t.Run(fixture.name, func(t *testing.T) {
 			live, path, root := capacityStart(t, consumer, capacityBaseYAML+fixture.yaml)
 			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
@@ -322,17 +344,41 @@ func TestZeroCapacityStartupAndCLI(t *testing.T) {
 			if err != nil {
 				t.Fatalf("compiled host set: %v %s", err, out)
 			}
+			if fixture.checkAnchors {
+				t.Logf("compiled host set returned success: %s", strings.TrimSpace(out))
+			}
 			if err := capacityWait(live, 0, 0); err != nil {
 				t.Fatal(err)
 			}
 			cmd := exec.CommandContext(ctx, consumer, "load", path) //nolint:gosec // private consumer reads the actual written config.
 			cmd.Env = []string{"HOME=" + root, "PATH=/usr/bin:/bin"}
+			var loadErrors bytes.Buffer
+			cmd.Stderr = &loadErrors
 			raw, err := cmd.Output()
 			var disk struct {
 				MaxConcurrentSessions int `json:"maxConcurrentSessions"`
 			}
 			if err != nil || json.Unmarshal(raw, &disk) != nil || disk.MaxConcurrentSessions != 0 {
-				t.Fatalf("host set disk/runtime disagree: disk=%s err=%v", raw, err)
+				t.Fatalf("host set disk/runtime disagree: disk=%s err=%v readback=%s", raw, err, loadErrors.String())
+			}
+			if fixture.checkAnchors {
+				cmd := exec.CommandContext(ctx, consumer, "yaml-values", path) //nolint:gosec // independent YAML parser reads the actual CLI-written config.
+				cmd.Env = []string{"HOME=" + root, "PATH=/usr/bin:/bin"}
+				raw, err := cmd.Output()
+				var parsed struct {
+					Values struct {
+						Observer     int `json:"observer"`
+						DefaultLimit int `json:"defaultLimit"`
+					} `json:"values"`
+					CapacityAnchor string `json:"capacityAnchor"`
+					ObserverAlias  string `json:"observerAlias"`
+					DefaultAnchor  string `json:"defaultAnchor"`
+				}
+				if err != nil || json.Unmarshal(raw, &parsed) != nil || parsed.Values.Observer != fixture.wantObserver ||
+					parsed.ObserverAlias != "limit" || parsed.CapacityAnchor != fixture.capacityAnchor || parsed.DefaultAnchor != fixture.defaultAnchor ||
+					(fixture.defaultAnchor != "" && parsed.Values.DefaultLimit != 3) {
+					t.Fatalf("host set changed scalar anchor/alias semantics: parsed=%s err=%v", raw, err)
+				}
 			}
 			capacityAssertRefused(t, live, 0)
 		})
