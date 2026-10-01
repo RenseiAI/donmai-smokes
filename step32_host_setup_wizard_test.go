@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -89,11 +90,15 @@ func TestHostSetupWizardGuidance(t *testing.T) {
 	afh.SkipIfShort(t, "interactive compiled host setup wizard smoke")
 	afh.SkipIfKnob(t, afh.SkipLiveDaemonEnv, "operator opted out of live-process smokes")
 
-	binary, source := afh.RequireDonmaiBinary(t, afh.LiveBinaryOptions{
-		SourceDir: inFlightSourceDir(),
-		Timeout:   8 * time.Minute, // cold offline builds can exceed the harness's three-minute default
-	})
-	t.Logf("compiled donmai from %s", source)
+	source := afh.RequireDonmaiSourceAt(t, inFlightSourceDir())
+	binary := ""
+	if goruntime.GOOS != "darwin" {
+		binary, _ = afh.RequireDonmaiBinary(t, afh.LiveBinaryOptions{
+			SourceDir: source,
+			Timeout:   8 * time.Minute, // cold offline builds can exceed the harness's three-minute default
+		})
+		t.Logf("compiled stock donmai from %s", source)
+	}
 	home := t.TempDir()
 	cwd := filepath.Join(home, "cwd")
 	if err := os.Mkdir(cwd, 0o700); err != nil {
@@ -139,6 +144,11 @@ func TestHostSetupWizardGuidance(t *testing.T) {
 	if err := os.Mkdir(certDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	if goruntime.GOOS == "darwin" {
+		// macOS ignores SSL_CERT_FILE for its system verifier. Build the same
+		// tracked production command source with a private fixture-only CA init.
+		binary = buildDarwinWizardFixture(t, source, home)
+	}
 	config := filepath.Join(home, ".donmai", "daemon.yaml")
 	cmd := exec.Command(binary, "host", "setup", "--config", config) //nolint:gosec // compiled SUT and fixed fixture args.
 	cmd.Dir = cwd
@@ -157,6 +167,12 @@ func TestHostSetupWizardGuidance(t *testing.T) {
 		"NO_PROXY=127.0.0.1,localhost",
 		"SSL_CERT_FILE=" + ca,
 		"SSL_CERT_DIR=" + certDir,
+	}
+	if goruntime.GOOS == "darwin" {
+		cmd.Env = append(cmd.Env,
+			"DONMAI_TEST_WIZARD_CA_FILE="+ca,
+			"GODEBUG="+wizardFixtureGODEBUG(os.Getenv("GODEBUG")),
+		)
 	}
 	terminal, err := pty.Start(cmd)
 	if err != nil {
@@ -331,5 +347,9 @@ func TestHostSetupWizardGuidance(t *testing.T) {
 		if !strings.Contains(transcript, want) {
 			t.Errorf("wizard completion missing %q\ntranscript:\n%s", want, transcript)
 		}
+	}
+	if goruntime.GOOS == "darwin" {
+		checkDarwinWizardTLSRefusals(t, binary, home)
+		afh.RecordLive(t.Name(), afh.LiveExercised, "actual production host setup handlers under a tracked-source Darwin fixture CA bootstrap")
 	}
 }

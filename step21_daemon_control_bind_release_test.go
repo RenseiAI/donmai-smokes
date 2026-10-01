@@ -286,8 +286,9 @@ func controlPortFailureReceipt(port int, owned *exec.Cmd, daemonLogs string) str
 			state = fmt.Sprintf("exited=%t exitCode=%d status=%s", owned.ProcessState.Exited(), owned.ProcessState.ExitCode(), owned.ProcessState.String())
 		}
 	}
-	return fmt.Sprintf("former owned pid=%d processState=%s\n%s\nprivate daemon log tail (last %d bytes):\n%s",
-		pid, state, controlPortSocketReceipt(port), maxLogBytes, daemonLogs)
+	return fmt.Sprintf("former owned pid=%d processState=%s\n%s\n%s\n%s\nprivate daemon log tail (last %d bytes):\n%s",
+		pid, state, controlBindTCPStateReceipt(port), controlPortSocketReceipt(port),
+		controlBindOwnPIDSocketReceipt(port, os.Getpid()), maxLogBytes, daemonLogs)
 }
 
 func controlPortSocketReceipt(port int) string {
