@@ -475,7 +475,7 @@ func TestHostWatchLayoutFromCompiledCLI(t *testing.T) {
 		if watchRow(lines, "project beta") >= 0 || watchRow(lines, "watch-b-") >= 0 {
 			t.Fatalf("default scope included other project: %q", lines)
 		}
-		for _, field := range []string{"project alpha", "harness fx", "model mini", "provider local", "state running", "tools not reported"} {
+		for _, field := range []string{"project alpha", "harness fx", "model mini", "Endpoint surface local", "state running", "tools not reported"} {
 			if watchRow(lines, field) < 0 {
 				t.Errorf("session card missing %q: %q", field, lines)
 			}

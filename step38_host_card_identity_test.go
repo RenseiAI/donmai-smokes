@@ -181,8 +181,12 @@ func TestHostWatchCardAndResponseIdentity(t *testing.T) {
 	rich, legacy := makeWorktree("rich"), makeWorktree("legacy")
 	started := time.Now().Add(-time.Minute).UnixMilli()
 	writeState := func(start int64) {
+		journal, err := os.Stat(filepath.Join(rich, ".agent", "events.jsonl"))
+		if err != nil {
+			t.Fatal(err)
+		}
 		writeJSON(filepath.Join(rich, ".agent", "state.json"), map[string]any{
-			"sessionId": "rich-identity", "startedAt": start, "issueIdentifier": "CARD-1",
+			"sessionId": "rich-identity", "startedAt": start, "eventLogStartOffset": journal.Size(), "issueIdentifier": "CARD-1",
 			"agentCardId": "stale-card", "agentCardName": "Stale", "harness": "stale-harness",
 			"model": "stale-model", "providerName": "stale-provider", "workType": "stale-work",
 		})
@@ -244,19 +248,19 @@ func TestHostWatchCardAndResponseIdentity(t *testing.T) {
 		t.Fatalf("daemon did not receive %d additional actual session polls", extra)
 	}
 	_, capture, quit := startWatchPTY(t, binary, cwd, home, server.URL, 180, "--all")
-	waitCardIdentity(t, capture, "CARD-1", "Agent card Reviewer", "Card ID card-review", "Model identity unknown", "Actual provider unknown", "Model version unknown", "harness pi", "model request-alias", "provider configured", "state running", "tools not reported", "project alpha")
+	waitCardIdentity(t, capture, "CARD-1", "Agent card Reviewer", "Card ID card-review", "Model identity unknown", "Actual provider unknown", "Model version unknown", "harness pi", "model request-alias", "Endpoint surface configured", "state running", "tools not reported", "project alpha")
 	// Requested/configured model fields alone are not a native response identity.
 	appendEvent(rich, map[string]any{"kind": "llm_call", "model": "request-alias", "system": "configured", "inputTokens": 1, "usageSource": "provider"})
 	appendEvent(rich, map[string]any{"kind": "tool_use", "toolName": "Read", "input": map[string]any{}})
 	waitCardIdentity(t, capture, "CARD-1", "tools 1", "Model identity unknown", "Actual provider unknown", "Model version unknown")
 	appendEvent(rich, map[string]any{"kind": "system", "subtype": "model_identity", "observedModel": map[string]any{"model": "served-id", "provider": "actual-vendor", "version": "snapshot-v2"}})
-	waitCardIdentity(t, capture, "CARD-1", "Model identity served-id", "Actual provider actual-vendor", "Model version snapshot-v2", "model request-alias", "provider configured")
+	waitCardIdentity(t, capture, "CARD-1", "Model identity served-id", "Actual provider actual-vendor", "Model version snapshot-v2", "model request-alias", "Endpoint surface configured")
 	appendEvent(rich, map[string]any{"kind": "tool_use", "toolName": "Read", "input": map[string]any{"path": "fixture.txt"}})
 	waitCardIdentity(t, capture, "CARD-1", "tools 2", "Model identity served-id")
 	mu.Lock()
 	handles = append(handles, legacyHandle)
 	mu.Unlock()
-	waitCardIdentity(t, capture, "legacy-i", "Agent card unknown", "Card ID unknown", "Model identity unknown", "Actual provider unknown", "Model version unknown", "harness unknown", "model unknown", "provider unknown", "project beta")
+	waitCardIdentity(t, capture, "legacy-i", "Agent card unknown", "Card ID unknown", "Model identity unknown", "Actual provider unknown", "Model version unknown", "harness unknown", "model unknown", "Endpoint surface unknown", "project beta")
 	writeJSON(filepath.Join(legacy, ".agent", "state.json"), map[string]any{"sessionId": "legacy-identity", "startedAt": started, "issueIdentifier": "CARD-2", "agentCardId": "local-card", "agentCardName": "Local"})
 	waitCardIdentity(t, capture, "CARD-2", "Agent card Local", "Card ID local-card", "Model identity unknown", "Actual provider unknown", "Model version unknown")
 	writeJSON(filepath.Join(legacy, ".agent", "state.json"), map[string]any{"sessionId": "different-session", "agentCardId": "foreign-card", "agentCardName": "Foreign"})
@@ -301,10 +305,10 @@ func TestHostWatchCardAndResponseIdentity(t *testing.T) {
 	// Replay uses a distinct matching session/run and must fold identity/counts
 	// without promoting historical work/output to fresh observations.
 	replay := makeWorktree("replay")
-	writeJSON(filepath.Join(replay, ".agent", "state.json"), map[string]any{"sessionId": "replay-identity", "issueIdentifier": "CARD-3", "startedAt": started})
+	writeJSON(filepath.Join(replay, ".agent", "state.json"), map[string]any{"sessionId": "replay-identity", "issueIdentifier": "CARD-3", "startedAt": started, "eventLogStartOffset": int64(0)})
 	appendEvent(replay, map[string]any{"kind": "system", "subtype": "model_identity", "observedModel": map[string]any{"model": "history-id", "provider": "history-vendor", "version": "history-v1"}})
 	appendEvent(replay, map[string]any{"kind": "tool_use", "toolName": "Read", "input": map[string]any{}})
-	appendEvent(replay, map[string]any{"kind": "result", "success": true, "cost": map[string]any{"totalCostUsd": 1.25, "numTurns": 4}})
+	appendEvent(replay, map[string]any{"kind": "result", "success": true, "cost": map[string]any{"totalCostUsd": 1.25, "numTurns": 4}, "observedCostUsd": 1.25, "observedTurns": 4})
 	mu.Lock()
 	handles = []map[string]any{{"sessionId": "replay-identity", "state": "completed", "worktreePath": replay, "model": "history-alias", "modelProvider": "configured"}}
 	mu.Unlock()
