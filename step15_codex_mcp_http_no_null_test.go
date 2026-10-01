@@ -422,6 +422,8 @@ type codexProbeRead struct {
 
 const maxCodexProbeOutput = 64 << 10
 
+var errCodexProbeOutputLimit = errors.New("codex output exceeded bounded capture")
+
 // codexProbeCapture bounds diagnostic output. Truncation fails the probe so
 // a rejection string cannot disappear beyond the capture limit.
 type codexProbeCapture struct {
@@ -485,6 +487,9 @@ func probeCodexMCPConfig(ctx context.Context, codexBin, base string) (retErr err
 		for {
 			var frame codexProbeFrame
 			err := dec.Decode(&frame)
+			if stdoutCapture.truncated {
+				err = errCodexProbeOutputLimit
+			}
 			select {
 			case frames <- codexProbeRead{frame: frame, err: err}:
 			case <-stopReader:
@@ -501,6 +506,20 @@ func probeCodexMCPConfig(ctx context.Context, codexBin, base string) (retErr err
 		defer readerTimer.Stop()
 		readerJoined := false
 		terminated := false
+		stopOwned := func() {
+			if err := cmd.Process.Kill(); err == nil {
+				terminated = true
+			} else if !errors.Is(err, os.ErrProcessDone) {
+				retErr = errors.Join(retErr, fmt.Errorf("stop owned Codex app-server: %w", err))
+			}
+			_ = stdout.Close()
+		}
+		// A protocol or bounded-output failure cannot leave the child running
+		// until the request's parent deadline. Stop exactly this process before
+		// joining its reader and os/exec's stderr copier.
+		if retErr != nil {
+			stopOwned()
+		}
 		for !readerJoined {
 			select {
 			case <-readDone:
@@ -509,12 +528,7 @@ func probeCodexMCPConfig(ctx context.Context, codexBin, base string) (retErr err
 				// Drain notifications so the decoder can reach EOF before Wait.
 			case <-readerTimer.C:
 				close(stopReader)
-				_ = stdout.Close() // unblock Decode even if the child keeps the pipe open
-				if err := cmd.Process.Kill(); err == nil {
-					terminated = true
-				} else if !errors.Is(err, os.ErrProcessDone) {
-					retErr = errors.Join(retErr, fmt.Errorf("stop owned Codex app-server: %w", err))
-				}
+				stopOwned() // unblock Decode even if the child keeps the pipe open
 				select {
 				case <-readDone:
 					readerJoined = true
@@ -526,26 +540,42 @@ func probeCodexMCPConfig(ctx context.Context, codexBin, base string) (retErr err
 			}
 		}
 	waitProcess:
-		wait := make(chan error, 1)
-		go func() { wait <- cmd.Wait() }()
-		waitJoined := false
-		select {
-		case err := <-wait:
-			waitJoined = true
-			if err != nil && !terminated {
-				retErr = errors.Join(retErr, fmt.Errorf("Codex app-server exit: %w", err))
-			}
-		case <-time.After(3 * time.Second):
-			_ = cmd.Process.Kill() // exact owned child; never wait unbounded
+		// Wait synchronously: returning while a separate Wait goroutine was
+		// still reaping this child made the old deadline branch untruthful.
+		// The existing three-second budget stops only this process; Cmd.WaitDelay
+		// then bounds its stderr copier after process exit.
+		watchdogDone := make(chan error, 1)
+		watchdog := time.AfterFunc(3*time.Second, func() {
+			killErr := cmd.Process.Kill()
 			_ = stdout.Close()
+			watchdogDone <- killErr
+		})
+		waitErr := cmd.Wait()
+		if !watchdog.Stop() {
+			killErr := <-watchdogDone
+			if killErr == nil {
+				terminated = true
+			} else if !errors.Is(killErr, os.ErrProcessDone) {
+				retErr = errors.Join(retErr, fmt.Errorf("stop owned Codex app-server: %w", killErr))
+			}
 			retErr = errors.Join(retErr, errors.New("Codex app-server wait deadline exceeded"))
 		}
-		if !readerJoined || !waitJoined {
+		if waitErr != nil && !terminated {
+			retErr = errors.Join(retErr, fmt.Errorf("Codex app-server exit: %w", waitErr))
+		}
+		if !readerJoined {
+			select {
+			case <-readDone:
+				readerJoined = true
+			default:
+			}
+		}
+		if !readerJoined {
 			retErr = errors.Join(retErr, errors.New("Codex output writers were not joined"))
 			return
 		}
-		if stdoutCapture.truncated || stderrCapture.truncated {
-			retErr = errors.Join(retErr, errors.New("Codex output exceeded bounded capture"))
+		if (stdoutCapture.truncated || stderrCapture.truncated) && !errors.Is(retErr, errCodexProbeOutputLimit) {
+			retErr = errors.Join(retErr, errCodexProbeOutputLimit)
 		}
 		output := stdoutCapture.buf.String() + "\n" + stderrCapture.buf.String()
 		for _, bad := range []string{
@@ -703,6 +733,34 @@ printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"config":{"mcp_servers":{"local
 				t.Fatalf("probe cleanup exceeded bound: %s", elapsed)
 			}
 		})
+	}
+}
+
+// The original flood case retains its three-second parent deadline. This
+// separate control leaves the same fake shell unlimited until the output
+// budget fires, proving the probe stops and joins it before parent cancellation.
+func TestCodexMCPNotificationFloodLongParentStopsAndJoins(t *testing.T) {
+	base := t.TempDir()
+	bin := filepath.Join(base, "fake-codex")
+	const flood = "read line\nwhile :; do printf '{\"jsonrpc\":\"2.0\",\"method\":\"noise\"}\\n'; done\n"
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"+flood), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	started := time.Now()
+	err := probeCodexMCPConfig(ctx, bin, base)
+	if ctx.Err() != nil {
+		t.Fatalf("flood parent expired before bounded capture: %v", ctx.Err())
+	}
+	if err == nil || !strings.Contains(err.Error(), "output exceeded bounded capture") {
+		t.Fatalf("flood probe error = %v, want bounded capture failure", err)
+	}
+	if strings.Contains(err.Error(), "wait deadline exceeded") || strings.Contains(err.Error(), "writers were not joined") {
+		t.Fatalf("flood returned without joining owned output: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 8*time.Second {
+		t.Fatalf("flood cleanup exceeded existing bound: %s", elapsed)
 	}
 }
 

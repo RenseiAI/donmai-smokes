@@ -1,11 +1,13 @@
 package smokes
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+	"gopkg.in/yaml.v3"
 
 	afh "github.com/RenseiAI/donmai-smokes/harness"
 )
@@ -32,8 +35,10 @@ var hostSetupPrompts = []wizardPrompt{
 	{"Continue? [Y/n]", "y"},
 	{"Choice [1]", "2"},
 	{"Continue? [Y/n]", "y"},
-	{"Add another project? [y/N]", "n"},
-	{"Accept any project routed to this machine? [Y/n]", "n"},
+	{"Native profile number", "1"},
+	{"GitHub owner/repository", "example/project"},
+	{"Issue label to watch", "work-ready"},
+	{"Base branch for new PRs", "release/next"},
 	{"Continue? [Y/n]", "y"},
 	{"Channel (stable/beta/main)", "stable"},
 	{"Schedule (nightly/on-release/manual)", "manual"},
@@ -85,15 +90,64 @@ func TestHostSetupWizardGuidance(t *testing.T) {
 	afh.SkipIfShort(t, "interactive compiled host setup wizard smoke")
 	afh.SkipIfKnob(t, afh.SkipLiveDaemonEnv, "operator opted out of live-process smokes")
 
-	binary, source := afh.RequireDonmaiBinary(t, afh.LiveBinaryOptions{
-		SourceDir: inFlightSourceDir(),
-		Timeout:   8 * time.Minute, // cold offline builds can exceed the harness's three-minute default
-	})
-	t.Logf("compiled donmai from %s", source)
+	source := afh.RequireDonmaiSourceAt(t, inFlightSourceDir())
+	binary := ""
+	if goruntime.GOOS != "darwin" {
+		binary, _ = afh.RequireDonmaiBinary(t, afh.LiveBinaryOptions{
+			SourceDir: source,
+			Timeout:   8 * time.Minute, // cold offline builds can exceed the harness's three-minute default
+		})
+		t.Logf("compiled stock donmai from %s", source)
+	}
 	home := t.TempDir()
 	cwd := filepath.Join(home, "cwd")
 	if err := os.Mkdir(cwd, 0o700); err != nil {
 		t.Fatal(err)
+	}
+	bin := filepath.Join(home, "bin")
+	if err := os.Mkdir(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// The real setup resolver probes the native CLI's version and first-party
+	// login. Reuse the finite external fixture from the whole-runtime smoke;
+	// only its read-only Claude probes are reachable in this setup test.
+	vendorModule := filepath.Join(home, "vendor-module")
+	if err := os.Mkdir(vendorModule, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(vendorModule, "go.mod"), []byte("module private-wizard-vendor\n\ngo 1.26.6\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(vendorModule, "main.go"), []byte(profileVendorSource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	buildCtx, buildCancel := context.WithTimeout(t.Context(), 90*time.Second)
+	defer buildCancel()
+	vendor := filepath.Join(bin, "vendor-fixture")
+	build := exec.CommandContext(buildCtx, "go", "build", "-o", vendor, ".") //nolint:gosec // private fixed fixture source and output.
+	build.Dir = vendorModule
+	build.Env = []string{"HOME=" + home, "PATH=" + os.Getenv("PATH"), "TMPDIR=" + home, "GOWORK=off", "GOTOOLCHAIN=local"}
+	if cache := os.Getenv("GOCACHE"); cache != "" {
+		build.Env = append(build.Env, "GOCACHE="+cache)
+	}
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build private native login fixture: %v: %s", err, out)
+	}
+	if err := os.Symlink(vendor, filepath.Join(bin, "claude")); err != nil {
+		t.Fatal(err)
+	}
+	// Production setup keeps the GitHub origin fixed. Its HTTPS traffic is
+	// confined to a private TLS server through a loopback CONNECT proxy.
+	external := &profileGitHub{baseSHA: strings.Repeat("a", 40), requests: map[string]int{}}
+	proxy, ca := profileTLSProxy(t, home, external)
+	certDir := filepath.Join(home, "empty-cert-dir")
+	if err := os.Mkdir(certDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if goruntime.GOOS == "darwin" {
+		// macOS ignores SSL_CERT_FILE for its system verifier. Build the same
+		// tracked production command source with a private fixture-only CA init.
+		binary = buildDarwinWizardFixture(t, source, home)
 	}
 	config := filepath.Join(home, ".donmai", "daemon.yaml")
 	cmd := exec.Command(binary, "host", "setup", "--config", config) //nolint:gosec // compiled SUT and fixed fixture args.
@@ -103,10 +157,22 @@ func TestHostSetupWizardGuidance(t *testing.T) {
 		"DONMAI_STATE_HOME=" + home,
 		"DONMAI_DAEMON_SKIP_WIZARD=",
 		"XDG_CONFIG_HOME=" + filepath.Join(home, ".config"),
-		"PATH=/usr/bin:/bin",
+		"PATH=" + bin + ":/usr/bin:/bin",
 		"LANG=C",
 		"TERM=dumb",
 		"NO_COLOR=1",
+		"GITHUB_TOKEN=" + profileFixtureToken,
+		"HTTPS_PROXY=" + proxy,
+		"HTTP_PROXY=" + proxy,
+		"NO_PROXY=127.0.0.1,localhost",
+		"SSL_CERT_FILE=" + ca,
+		"SSL_CERT_DIR=" + certDir,
+	}
+	if goruntime.GOOS == "darwin" {
+		cmd.Env = append(cmd.Env,
+			"DONMAI_TEST_WIZARD_CA_FILE="+ca,
+			"GODEBUG="+wizardFixtureGODEBUG(os.Getenv("GODEBUG")),
+		)
 	}
 	terminal, err := pty.Start(cmd)
 	if err != nil {
@@ -203,7 +269,7 @@ func TestHostSetupWizardGuidance(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"apiVersion: donmai.dev/v1", "kind: LocalDaemon", "projectAdmissionVersion: 2",
+		"apiVersion: donmai.dev/v2", "kind: LocalDaemon", "projectAdmissionVersion: 2",
 		"id: smoke-local-setup", "region: offline-smoke", "maxConcurrentSessions: 2",
 		"vCpu: 1", "memoryMb: 1024", "projectAdmissionMode: enumerated",
 		"url: file://" + filepath.Join(home, ".donmai", "queue"),
@@ -216,7 +282,64 @@ func TestHostSetupWizardGuidance(t *testing.T) {
 	if strings.Contains(string(data), "authToken:") {
 		t.Errorf("local queue config unexpectedly contains registration token")
 	}
+	var local struct {
+		LocalRuntime struct {
+			Harness           string `yaml:"harness"`
+			Model             string `yaml:"model"`
+			ModelAuthor       string `yaml:"modelAuthor"`
+			ExecutionSecurity struct {
+				ToolApproval string `yaml:"toolApproval"`
+				FileRead     string `yaml:"fileRead"`
+				FileWrite    string `yaml:"fileWrite"`
+				Network      string `yaml:"network"`
+				Credentials  string `yaml:"credentials"`
+				Isolation    string `yaml:"isolation"`
+			} `yaml:"executionSecurity"`
+			Repositories []struct {
+				RepositoryID int64  `yaml:"repositoryId"`
+				OwnerRepo    string `yaml:"ownerRepo"`
+				Label        string `yaml:"label"`
+				Ref          string `yaml:"ref"`
+			} `yaml:"repositories"`
+		} `yaml:"localRuntime"`
+	}
+	if err := yaml.Unmarshal(data, &local); err != nil {
+		t.Fatalf("decode written local runtime config: %v", err)
+	}
+	runtime := local.LocalRuntime
+	if runtime.Harness != "claude-code" || runtime.Model != "claude-sonnet-5" || runtime.ModelAuthor != "anthropic" || len(runtime.Repositories) != 1 {
+		t.Errorf("wizard config lost authenticated native profile or singular source: %+v", runtime)
+	} else if repository := runtime.Repositories[0]; repository.RepositoryID != 42 || repository.OwnerRepo != "example/project" || repository.Label != "work-ready" || repository.Ref != "release/next" {
+		t.Errorf("wizard config lost independently verified GitHub repository/base: %+v", repository)
+	}
+	policy := runtime.ExecutionSecurity
+	if policy.ToolApproval != "bypass" || policy.FileRead != "host" || policy.FileWrite != "host" || policy.Network != "open" || policy.Credentials != "ambient-host-login" || policy.Isolation != "host-user" {
+		t.Errorf("wizard config lost explicit local execution security: %+v", policy)
+	}
+	external.mu.Lock()
+	repositoryReads := external.requests["GET /repos/example/project"]
+	branchReads := external.requests["GET /repos/example/project/branches/release%2Fnext"]
+	remoteErrors := append([]string(nil), external.errors...)
+	external.mu.Unlock()
+	if repositoryReads < 2 || branchReads < 1 || len(remoteErrors) != 0 {
+		t.Errorf("real setup omitted independent GitHub metadata/base verification: repository_reads=%d branch_reads=%d errors=%v", repositoryReads, branchReads, remoteErrors)
+	}
+	versionProbes, loginProbes := 0, 0
+	for _, record := range profileRecords(t, home) {
+		switch record["kind"] {
+		case "version":
+			versionProbes++
+		case "login":
+			loginProbes++
+		}
+	}
+	if versionProbes < 1 || loginProbes < 1 {
+		t.Errorf("real setup omitted native version/login probes: version=%d login=%d", versionProbes, loginProbes)
+	}
 	transcript := strings.ReplaceAll(output.snapshot(), "\r", "")
+	if strings.Contains(string(data), profileFixtureToken) || strings.Contains(transcript, profileFixtureToken) {
+		t.Error("synthetic GitHub source credential leaked to config or setup output")
+	}
 	for _, want := range []string{
 		"Setup complete. Config written to " + config,
 		"Status: donmai host status", "Logs:   donmai host logs", "Stop:   donmai host stop",
@@ -224,5 +347,9 @@ func TestHostSetupWizardGuidance(t *testing.T) {
 		if !strings.Contains(transcript, want) {
 			t.Errorf("wizard completion missing %q\ntranscript:\n%s", want, transcript)
 		}
+	}
+	if goruntime.GOOS == "darwin" {
+		checkDarwinWizardTLSRefusals(t, binary, home)
+		afh.RecordLive(t.Name(), afh.LiveExercised, "actual production host setup handlers under a tracked-source Darwin fixture CA bootstrap")
 	}
 }
