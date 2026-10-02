@@ -203,14 +203,19 @@ func TestPublicManagerExcludesRegistrationWriter(t *testing.T){
 func TestPublicManagerWaitingFetchTimeoutAndRecovery(t *testing.T){
  f:=newGitFixture(t);ctx,cancel:=context.WithTimeout(t.Context(),5*time.Second);t.Cleanup(cancel)
  writer:=startWriter(t,f,ctx);var fetches atomic.Int32
- reader:=newManager(t,f,"timeout-areas",25*time.Millisecond,func(ctx context.Context,name string,args ...string)([]byte,error){if isFetch(args){fetches.Add(1)};return f.run(ctx,name,args...)})
+ runner:=func(ctx context.Context,name string,args ...string)([]byte,error){if isFetch(args){fetches.Add(1)};return f.run(ctx,name,args...)}
+ reader:=newManager(t,f,"timeout-areas",25*time.Millisecond,runner)
  _,err:=reader.Provision(ctx,provisionSpec(f,"timed-out","release/one"))
  if !errors.Is(err,context.DeadlineExceeded) || !errors.Is(err,worktree.ErrBaseFetch){t.Fatalf("held writer did not bound fetch wait: %v",err)}
  if fetches.Load()!=0{t.Fatalf("expired fetch reached Git %d times",fetches.Load())}
  if _,err:=reader.Result("timed-out");!errors.Is(err,worktree.ErrUnknownSession){t.Fatalf("expired reader retained successful session: %v",err)}
  writer.restore(t,f);writer.finish(t,ctx)
- _,err=reader.Provision(ctx,provisionSpec(f,"recovered","release/one"));if err!=nil{t.Fatalf("canceled flight prevented recovery: %v",err)}
- actual,err:=reader.Result("recovered");if err!=nil{t.Fatal(err)};if actual.BaseSHA!=f.tip || !actual.BaseFetched || fetches.Load()!=1{t.Fatalf("recovery did not clean flight and advance ref: result=%+v fetches=%d",actual,fetches.Load())}
+ // The expired flight is shared by canonical parent/ref across managers.
+ // Recover against that same key and workarea directory using the normal real-Git budget.
+ recovery:=newManager(t,f,"timeout-areas",time.Second,runner)
+ _,err=recovery.Provision(ctx,provisionSpec(f,"recovered","release/one"));if err!=nil{t.Fatalf("canceled flight prevented recovery: %v",err)}
+ actual,err:=recovery.Result("recovered");if err!=nil{t.Fatal(err)};if actual.BaseSHA!=f.tip || !actual.BaseFetched || fetches.Load()!=1{t.Fatalf("recovery did not clean flight and advance ref: result=%+v fetches=%d",actual,fetches.Load())}
+ if f.git(t,"-C",f.parent,"rev-parse","origin/release/one")!=f.tip{t.Fatal("recovery remote tracking ref did not advance")}
 }
 
 func TestPublicManagerDistinctFetchesOverlap(t *testing.T){
