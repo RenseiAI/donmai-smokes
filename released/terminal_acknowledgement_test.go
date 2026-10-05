@@ -612,13 +612,26 @@ func (f *fakeTerminalReceiver) snapshot() (int, []byte, string, error) {
 	return f.requests, append([]byte(nil), f.body...), f.authorization, f.err
 }
 
+// repositoryRoot returns the module root by walking up from the working
+// directory (the package directory under `go test`) to go.mod. runtime.Caller
+// is deliberately avoided: under `-trimpath` it returns a module-relative path
+// rather than a location on disk.
 func repositoryRoot(t *testing.T) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve test source path")
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
 	}
-	return filepath.Dir(filepath.Dir(file))
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("no go.mod found walking up from the working directory")
+		}
+		dir = parent
+	}
 }
 
 func downloadReleaseFile(t *testing.T, name string, maximumBytes int64) []byte {
