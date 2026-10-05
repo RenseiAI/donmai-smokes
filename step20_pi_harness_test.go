@@ -123,6 +123,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -205,6 +206,12 @@ type piHarnessFixture struct {
 	fakeBinDir   string
 	nodeDir      string
 
+	// statusMu guards statuses: the bodies of every terminal
+	// /api/sessions/<id>/status post (any status other than "running")
+	// the runner sent to the fixture's platformUrl, in order.
+	statusMu sync.Mutex
+	statuses [][]byte
+
 	// upstreamBaseURL/upstreamKey are the worker-side gateway knobs
 	// (afcli/gateway_bind.go's DONMAI_GATEWAY_UPSTREAM_BASE_URL /
 	// DONMAI_GATEWAY_UPSTREAM_API_KEY), set only by
@@ -254,9 +261,13 @@ func setupPiHarnessFixture(t *testing.T, testName string, resolvedProfile map[st
 		budget = stageBudgetSeconds[0]
 	}
 
+	f := &piHarnessFixture{}
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost && r.URL.Path == "/api/sessions/"+sessionID+"/status" {
+			f.recordStatus(r)
+		}
 		if r.Method == http.MethodGet && r.URL.Path == "/api/daemon/sessions/"+sessionID {
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"sessionId":       sessionID,
@@ -285,15 +296,47 @@ func setupPiHarnessFixture(t *testing.T, testName string, resolvedProfile map[st
 	fakeBinDir := t.TempDir()
 	writeBackstopGhShimStep20(t, fakeBinDir)
 
-	return &piHarnessFixture{
-		donmaiBinary: donmaiBinary,
-		daemonSrv:    srv,
-		sessionID:    sessionID,
-		wtParent:     wtParent,
-		home:         home,
-		fakeBinDir:   fakeBinDir,
-		nodeDir:      nodeBinDir(),
+	f.donmaiBinary = donmaiBinary
+	f.daemonSrv = srv
+	f.sessionID = sessionID
+	f.wtParent = wtParent
+	f.home = home
+	f.fakeBinDir = fakeBinDir
+	f.nodeDir = nodeBinDir()
+	return f
+}
+
+// recordStatus keeps the body of a terminal status post (the runner also
+// posts a "running" transition, which is skipped).
+func (f *piHarnessFixture) recordStatus(r *http.Request) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		return
 	}
+	var status struct {
+		Status string `json:"status"`
+	}
+	if json.Unmarshal(body, &status) != nil || status.Status == "running" {
+		return
+	}
+	f.statusMu.Lock()
+	f.statuses = append(f.statuses, body)
+	f.statusMu.Unlock()
+}
+
+// terminalStatus decodes the last terminal status body the fixture
+// received, or returns nil when none arrived.
+func (f *piHarnessFixture) terminalStatus() map[string]json.RawMessage {
+	f.statusMu.Lock()
+	defer f.statusMu.Unlock()
+	if len(f.statuses) == 0 {
+		return nil
+	}
+	var body map[string]json.RawMessage
+	if json.Unmarshal(f.statuses[len(f.statuses)-1], &body) != nil {
+		return nil
+	}
+	return body
 }
 
 // pathEntries assembles the PATH `donmai agent run` hands the child: the fake
@@ -437,7 +480,7 @@ func (s *piCompletedTurnStub) handleChatCompletions(w http.ResponseWriter, r *ht
 				"message":       map[string]any{"role": "assistant", "content": s.assistantText()},
 				"finish_reason": "stop",
 			}},
-			"usage": map[string]any{"prompt_tokens": 11, "completion_tokens": 9, "total_tokens": 20},
+			"usage": piCompletedTurnUsage(),
 		})
 		return
 	}
@@ -464,11 +507,30 @@ func (s *piCompletedTurnStub) handleChatCompletions(w http.ResponseWriter, r *ht
 	chunk(map[string]any{"choices": []map[string]any{{"index": 0, "delta": map[string]any{"content": s.assistantText()}}}})
 	chunk(map[string]any{
 		"choices": []map[string]any{{"index": 0, "delta": map[string]any{}, "finish_reason": "stop"}},
-		"usage":   map[string]any{"prompt_tokens": 11, "completion_tokens": 9, "total_tokens": 20},
+		"usage":   piCompletedTurnUsage(),
 	})
 	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 	if flusher != nil {
 		flusher.Flush()
+	}
+}
+
+// The usage the completed-turn stub reports on every chat-completions
+// response, in the OpenAI shape: prompt_tokens INCLUDES the cached prefix,
+// which prompt_tokens_details.cached_tokens names. The harness reports the
+// cached part as cache reads and only the rest as input.
+const (
+	piCompletedTurnPromptTokens = 4107
+	piCompletedTurnCachedTokens = 4096
+	piCompletedTurnOutputTokens = 9
+)
+
+func piCompletedTurnUsage() map[string]any {
+	return map[string]any{
+		"prompt_tokens":         piCompletedTurnPromptTokens,
+		"completion_tokens":     piCompletedTurnOutputTokens,
+		"total_tokens":          piCompletedTurnPromptTokens + piCompletedTurnOutputTokens,
+		"prompt_tokens_details": map[string]any{"cached_tokens": piCompletedTurnCachedTokens},
 	}
 }
 
@@ -707,8 +769,40 @@ func TestPiHarnessSmoke_RealBinary_CompletedTurn(t *testing.T) {
 			res.Status, res.FailureMode, res.Error)
 	}
 
+	// (3) the cached prefix reached the status post: every stub response
+	// reported cached prompt tokens, so the terminal status the runner
+	// posted must carry them as cacheReadTokens, with inputTokens counting
+	// only the uncached rest. A harness mapper that drops the cache bucket
+	// posts no cacheReadTokens at all, and the platform's ledger then never
+	// sees a cache read.
+	assertPiStatusCacheReads(t, f.terminalStatus(), int64(len(models)))
+
 	t.Logf("pi completed-turn lane: %d stub request(s), all addressed model %q; status=%q failureMode=%q",
 		len(models), model, res.Status, res.FailureMode)
+}
+
+// assertPiStatusCacheReads checks the terminal status body against calls
+// stub responses' worth of piCompletedTurnUsage.
+func assertPiStatusCacheReads(t *testing.T, status map[string]json.RawMessage, calls int64) {
+	t.Helper()
+	if status == nil {
+		t.Fatal("the runner posted no terminal status to the fixture's platformUrl")
+	}
+	want := map[string]int64{
+		"cacheReadTokens": calls * piCompletedTurnCachedTokens,
+		"inputTokens":     calls * (piCompletedTurnPromptTokens - piCompletedTurnCachedTokens),
+	}
+	for key, w := range want {
+		raw, ok := status[key]
+		if !ok {
+			t.Errorf("terminal status carries no %s; want %d", key, w)
+			continue
+		}
+		var got int64
+		if err := json.Unmarshal(raw, &got); err != nil || got != w {
+			t.Errorf("terminal status %s = %s; want %d", key, raw, w)
+		}
+	}
 }
 
 // TestPiHarnessSmoke_RealBinary_Teardown drives the REAL pinned pi binary,
