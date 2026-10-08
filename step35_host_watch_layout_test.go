@@ -120,7 +120,7 @@ func watchFixtureColumns(host, scope string) int {
 	if scope != "" {
 		identityColumns += len(" · " + scope)
 	}
-	counterColumns := len("1 running   queue 0   uptime 1m 30s   v0.72.26")
+	counterColumns := len("1 running   queue 0   slots 2/8   uptime 1m 30s   v0.72.26")
 	const paddingAndGap = 3 // one padding cell per side and one gap
 	return max(watchColumns, identityColumns+counterColumns+paddingAndGap)
 }
@@ -430,6 +430,9 @@ func TestHostWatchLayoutFromCompiledCLI(t *testing.T) {
 		}
 		if watchRow(lines, "2 running") != 0 {
 			t.Errorf("fleet header omitted the session count: %q", lines[0])
+		}
+		if watchRow(lines, "slots 2/8") != 0 {
+			t.Errorf("fleet header omitted the host's session slots: %q", lines[0])
 		}
 		// The help line documents every key this step presses.
 		for _, key := range []string{"jk select", "enter detail", "[ ] split", "0 reset", "g tail", "q quit"} {

@@ -108,7 +108,7 @@ func TestHostWatchCardAndResponseIdentity(t *testing.T) {
 			t.Fatal(err)
 		}
 		writeJSON(filepath.Join(rich, ".agent", "state.json"), map[string]any{
-			"sessionId": "rich-identity", "startedAt": start, "eventLogStartOffset": journal.Size(), "issueIdentifier": "CARD-1",
+			"sessionId": "rich-identity", "startedAt": start, "eventLogStartOffset": journal.Size(), "issueIdentifier": "CARD-1", "issueTitle": "Review fixture title",
 			"agentCardId": "stale-card", "agentCardName": "Stale", "harness": "stale-harness",
 			"model": "stale-model", "providerName": "stale-provider", "workType": "stale-work",
 		})
@@ -198,7 +198,13 @@ func TestHostWatchCardAndResponseIdentity(t *testing.T) {
 	waitWatchCard(t, capture, "CARD-1")
 	press("\r")
 	detail("CARD-1", field("Agent card", "Reviewer"), field("Card ID", "card-review"), field("Model identity", "unknown"), field("Actual provider", "unknown"), field("Model version", "unknown"),
-		field("Harness", "pi"), field("Model", "request-alias"), field("Endpoint surface", "configured"), field("State", "running"), field("Tools", "not reported"), field("Project", "alpha"))
+		field("Harness", "pi"), field("Model", "request-alias"), field("Endpoint surface", "configured"), field("State", "running"), field("Tools", "not reported"), field("Project", "alpha"),
+		field("Title", "Review fixture title"))
+	// The first row is the animated status dot, the issue id, then the title.
+	waitCardRow(t, capture, "CARD-1", 0, `"CARD-1 Review fixture title" after the status dot`, func(row string) bool {
+		fields := strings.Fields(row)
+		return len(fields) > 1 && strings.Join(fields[1:], " ") == "CARD-1 Review fixture title"
+	})
 	cardRowIs(t, capture, "CARD-1", 1, "alpha · development")
 	cardRowIs(t, capture, "CARD-1", 2, "request-alias · pi")
 	// Requested/configured model fields alone are not a native response identity.
