@@ -4,18 +4,19 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"testing"
 	"time"
 
+	vt "github.com/charmbracelet/x/vt"
 	"github.com/creack/pty"
 
 	afh "github.com/RenseiAI/donmai-smokes/harness"
@@ -49,148 +50,39 @@ func (c *watchCapture) snapshot() []byte {
 	return bytes.Clone(c.raw.Bytes())
 }
 
-// watchScreen applies the terminal's cursor/erase operations to one current
-// screen. Searching the accumulated PTY transcript would let a stale frame
-// satisfy a check after a split or selection key.
+// watchScreen interprets the PTY transcript as a terminal does and returns the
+// rows of the current screen. Searching the accumulated transcript would let a
+// stale frame satisfy a check after a split or selection key. The renderer
+// repaints with scroll regions (set region, scroll up/down inside it), so the
+// transcript is replayed through a terminal emulator that implements them
+// rather than a hand-rolled cursor model, which silently ignores them and
+// reads the screen as it was before the scroll.
 func watchScreen(raw []byte, columns int) []string {
-	cells := make([][]rune, watchRows)
-	for row := range cells {
-		cells[row] = []rune(strings.Repeat(" ", columns))
-	}
-	x, y := 0, 0
-	clamp := func(value, maximum int) int {
-		if value < 0 {
-			return 0
-		}
-		if value >= maximum {
-			return maximum - 1
-		}
-		return value
-	}
-	scroll := func() {
-		copy(cells, cells[1:])
-		cells[watchRows-1] = []rune(strings.Repeat(" ", columns))
-		y = watchRows - 1
-	}
-	runes := []rune(string(raw))
-	for i := 0; i < len(runes); i++ {
-		r := runes[i]
-		if r == '\x1b' && i+1 < len(runes) {
-			i++
-			switch runes[i] {
-			case '[':
-				start := i + 1
-				for i+1 < len(runes) && (runes[i+1] < '@' || runes[i+1] > '~') {
-					i++
-				}
-				if i+1 >= len(runes) {
-					break
-				}
-				params := string(runes[start : i+1])
-				i++
-				parts := strings.Split(params, ";")
-				num := func(index, fallback int) int {
-					if index >= len(parts) {
-						return fallback
-					}
-					n, err := strconv.Atoi(parts[index])
-					if err != nil || n == 0 {
-						return fallback
-					}
-					return n
-				}
-				switch runes[i] {
-				case 'H', 'f':
-					y, x = clamp(num(0, 1)-1, watchRows), clamp(num(1, 1)-1, columns)
-				case 'd':
-					y = clamp(num(0, 1)-1, watchRows)
-				case 'G':
-					x = clamp(num(0, 1)-1, columns)
-				case 'A':
-					y = clamp(y-num(0, 1), watchRows)
-				case 'B':
-					y = clamp(y+num(0, 1), watchRows)
-				case 'C':
-					x = clamp(x+num(0, 1), columns)
-				case 'D':
-					x = clamp(x-num(0, 1), columns)
-				case 'J':
-					if num(0, 0) == 2 {
-						for row := range cells {
-							cells[row] = []rune(strings.Repeat(" ", columns))
-						}
-					}
-				case 'K':
-					if num(0, 0) == 1 {
-						for col := 0; col <= x; col++ {
-							cells[y][col] = ' '
-						}
-					} else {
-						for col := x; col < columns; col++ {
-							cells[y][col] = ' '
-						}
-					}
-				case 'X':
-					for col := x; col < x+num(0, 1) && col < columns; col++ {
-						cells[y][col] = ' '
-					}
-				case 'M':
-					for range num(0, 1) {
-						copy(cells[y:], cells[y+1:])
-						cells[watchRows-1] = []rune(strings.Repeat(" ", columns))
-					}
-				case 'L':
-					for range num(0, 1) {
-						copy(cells[y+1:], cells[y:watchRows-1])
-						cells[y] = []rune(strings.Repeat(" ", columns))
-					}
-				}
-			case ']':
-				for i+1 < len(runes) {
-					if runes[i+1] == '\a' || (runes[i+1] == '\x1b' && i+2 < len(runes) && runes[i+2] == '\\') {
-						break
-					}
-					i++
-				}
-				if i+1 < len(runes) && runes[i+1] == '\x1b' {
-					i += 2
-				} else if i+1 < len(runes) {
-					i++
-				}
-			case 'M':
-				y = clamp(y-1, watchRows)
+	terminal := vt.NewEmulator(columns, watchRows)
+	readerDone := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(io.Discard, terminal)
+		close(readerDone)
+	}()
+	_, _ = terminal.Write(raw)
+	lines := make([]string, terminal.Height())
+	for row := range lines {
+		var line strings.Builder
+		for column := 0; column < terminal.Width(); column++ {
+			cell := terminal.CellAt(column, row)
+			if cell == nil {
+				line.WriteByte(' ')
+			} else if cell.Width > 0 {
+				line.WriteString(cell.Content)
 			}
-			continue
 		}
-		switch r {
-		case '\r':
-			x = 0
-		case '\n':
-			y++
-			if y >= watchRows {
-				scroll()
-			}
-		case '\b':
-			x = clamp(x-1, columns)
-		default:
-			if r < ' ' || r == '\x7f' {
-				continue
-			}
-			if x >= columns {
-				x = 0
-				y++
-				if y >= watchRows {
-					scroll()
-				}
-			}
-			cells[y][x] = r
-			x++
-		}
+		lines[row] = strings.TrimRight(line.String(), " ")
 	}
-	lines := make([]string, watchRows)
-	for row := range cells {
-		lines[row] = strings.TrimRight(string(cells[row]), " ")
-	}
+	// Read and Close in this dependency share an unsynchronized closed flag.
+	// Stop the pipe reader first, then close the now-single-owner emulator.
+	_ = terminal.InputPipe().(io.Closer).Close()
+	<-readerDone
+	_ = terminal.Close()
 	return lines
 }
 
@@ -228,7 +120,7 @@ func watchFixtureColumns(host, scope string) int {
 	if scope != "" {
 		identityColumns += len(" · " + scope)
 	}
-	counterColumns := len("1 running   queue 0   uptime 1m 30s   v0.72.26")
+	counterColumns := len("1 running   queue 0   slots 2/8   uptime 1m 30s   v0.72.26")
 	const paddingAndGap = 3 // one padding cell per side and one gap
 	return max(watchColumns, identityColumns+counterColumns+paddingAndGap)
 }
@@ -345,6 +237,7 @@ func TestHostWatchLayoutFromCompiledCLI(t *testing.T) {
 	}
 	type handle struct {
 		SessionID    string `json:"sessionId"`
+		IssueID      string `json:"issueIdentifier"`
 		PID          int    `json:"pid"`
 		State        string `json:"state"`
 		AcceptedAt   string `json:"acceptedAt"`
@@ -356,9 +249,11 @@ func TestHostWatchLayoutFromCompiledCLI(t *testing.T) {
 		Provider     string `json:"modelProvider"`
 		WorkType     string `json:"workType"`
 	}
+	// Cards are named by issue id, so the fixture sessions carry one.
+	const issueA, issueB = "FIX-101", "FIX-202"
 	sessions := []handle{
-		{SessionID: "watch-a-0001", PID: 9101, State: "running", AcceptedAt: "2026-09-28T00:00:00Z", WorktreePath: filepath.Join(root, "sessions", "watch-a-0001"), ProjectName: "alpha", Repository: "fixture/alpha", Harness: "fx", Model: "mini", Provider: "local", WorkType: "development"},
-		{SessionID: "watch-b-0002", PID: 9102, State: "running", AcceptedAt: "2026-09-28T00:00:00Z", WorktreePath: filepath.Join(root, "sessions", "watch-b-0002"), ProjectName: "beta", Repository: "fixture/beta", Harness: "fx", Model: "mini", Provider: "local", WorkType: "qa"},
+		{SessionID: "watch-a-0001", IssueID: issueA, PID: 9101, State: "running", AcceptedAt: "2026-09-28T00:00:00Z", WorktreePath: filepath.Join(root, "sessions", "watch-a-0001"), ProjectName: "alpha", Repository: "fixture/alpha", Harness: "fx", Model: "mini", Provider: "local", WorkType: "development"},
+		{SessionID: "watch-b-0002", IssueID: issueB, PID: 9102, State: "running", AcceptedAt: "2026-09-28T00:00:00Z", WorktreePath: filepath.Join(root, "sessions", "watch-b-0002"), ProjectName: "beta", Repository: "fixture/beta", Harness: "fx", Model: "mini", Provider: "local", WorkType: "qa"},
 	}
 	for _, session := range sessions {
 		if err := os.MkdirAll(filepath.Join(session.WorktreePath, ".agent"), 0o700); err != nil {
@@ -421,7 +316,7 @@ func TestHostWatchLayoutFromCompiledCLI(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				_, capture, quit := startWatchPTY(t, binary, cwd, home, daemon.URL, tc.columns, tc.args...)
 				lines, ok := waitWatchScreen(capture, func(lines []string) bool {
-					return watchRow(lines, "watch-a-") >= 0 && watchRow(lines, tc.running) >= 0
+					return watchRow(lines, issueA) >= 0 && watchRow(lines, tc.running) >= 0
 				})
 				if !ok {
 					t.Fatalf("host header and session did not render at width %d: %q", tc.columns, lines[:3])
@@ -461,10 +356,14 @@ func TestHostWatchLayoutFromCompiledCLI(t *testing.T) {
 			})
 		}
 	})
+	screenOf := func(c *watchCapture) func() []string {
+		return func() []string { return watchScreen(c.snapshot(), c.columns) }
+	}
 	t.Run("default project scope", func(t *testing.T) {
-		_, capture, quit := startWatchPTY(t, binary, cwd, home, daemon.URL, watchFixtureColumns(host, "fixture/alpha"))
+		terminal, capture, quit := startWatchPTY(t, binary, cwd, home, daemon.URL, watchFixtureColumns(host, "fixture/alpha"))
 		lines, ok := waitWatchScreen(capture, func(lines []string) bool {
-			return watchRow(lines, "watch-a-") >= 0 && watchRow(lines, "1 running") >= 0
+			_, found := watchCardAt(lines, issueA)
+			return found && watchRow(lines, "1 running") >= 0
 		})
 		if !ok {
 			t.Fatalf("default scope never rendered: %q", lines)
@@ -472,69 +371,127 @@ func TestHostWatchLayoutFromCompiledCLI(t *testing.T) {
 		if !strings.Contains(lines[0], host) || !strings.Contains(lines[0], "fixture/alpha") || strings.HasPrefix(strings.TrimSpace(lines[0]), "donmai") {
 			t.Fatalf("header did not lead with host and scoped project: %q", lines[0])
 		}
-		if watchRow(lines, "project beta") >= 0 || watchRow(lines, "watch-b-") >= 0 {
+		if _, other := watchCardAt(lines, issueB); other || watchRow(lines, "beta · qa") >= 0 {
 			t.Fatalf("default scope included other project: %q", lines)
 		}
-		for _, field := range []string{"project alpha", "harness fx", "model mini", "Endpoint surface local", "state running", "tools not reported"} {
-			if watchRow(lines, field) < 0 {
-				t.Errorf("session card missing %q: %q", field, lines)
+		card, _ := watchCardAt(lines, issueA)
+		for row, want := range map[int]string{1: "alpha · development", 2: "mini · fx", 4: "activity not reported"} {
+			if card.Rows[row] != want {
+				t.Errorf("session card row %d = %q, want %q: %q", row, card.Rows[row], want, card.Rows)
 			}
+		}
+		if !strings.HasPrefix(card.Rows[3], "running") {
+			t.Errorf("session card state row = %q, want it to start with running", card.Rows[3])
+		}
+		// A card keeps to the essentials; the endpoint surface and the tool
+		// count are reachable in the selected session's detail.
+		if _, err := terminal.Write([]byte("\r")); err != nil {
+			t.Fatal(err)
+		}
+		waitWatchDetail(t, capture, screenOf(capture), issueA,
+			field("Harness", "fx"), field("Model", "mini"), field("Endpoint surface", "local"), field("Tools", "not reported"))
+		if _, err := terminal.Write([]byte("\x1b")); err != nil {
+			t.Fatal(err)
+		}
+		if closed, ok := waitWatchScreen(capture, func(next []string) bool {
+			_, open := watchDetailID(next)
+			return !open && watchPaneTitleRow(next) >= 0
+		}); !ok {
+			t.Fatalf("escape did not return the detail pane to the session stream: %q", closed)
 		}
 		quit()
 	})
 	t.Run("fleet grid split and selection", func(t *testing.T) {
 		terminal, capture, quit := startWatchPTY(t, binary, cwd, home, daemon.URL, watchFixtureColumns(host, ""), "--all")
 		lines, ok := waitWatchScreen(capture, func(lines []string) bool {
-			return watchRow(lines, "watch-a-") >= 0 && watchRow(lines, "watch-b-") >= 0 && watchRow(lines, "FOLLOW") >= 0
+			_, foundA := watchCardAt(lines, issueA)
+			_, foundB := watchCardAt(lines, issueB)
+			return foundA && foundB
 		})
 		if !ok {
 			t.Fatalf("fleet view never rendered: %q", lines)
 		}
-		alpha, beta := watchRow(lines, "watch-a-"), watchRow(lines, "watch-b-")
-		if beta-alpha < -1 || beta-alpha > 1 {
-			t.Fatalf("cards from separate projects did not share a grid row: alpha=%d beta=%d screen=%q", alpha, beta, lines)
+		alpha, _ := watchCardAt(lines, issueA)
+		beta, _ := watchCardAt(lines, issueB)
+		if alpha.Row != beta.Row || alpha.Col >= beta.Col {
+			t.Fatalf("cards from separate projects did not flow across one grid row: alpha=(%d,%d) beta=(%d,%d) screen=%q", alpha.Row, alpha.Col, beta.Row, beta.Col, lines)
 		}
-		if watchRow(lines, "project alpha") < 0 || watchRow(lines, "project beta") < 0 {
-			t.Fatalf("fleet cards omitted their project scope: %q", lines)
+		for _, tc := range []struct {
+			name    string
+			card    watchCardView
+			context string
+		}{{issueA, alpha, "alpha · development"}, {issueB, beta, "beta · qa"}} {
+			if tc.card.Rows[1] != tc.context || tc.card.Rows[2] != "mini · fx" {
+				t.Errorf("card %s project/model rows = %q / %q, want %q / %q", tc.name, tc.card.Rows[1], tc.card.Rows[2], tc.context, "mini · fx")
+			}
 		}
 		if !strings.Contains(lines[0], host) || strings.Contains(lines[0], "all projects") || strings.HasPrefix(strings.TrimSpace(lines[0]), "donmai") {
 			t.Fatalf("fleet header did not lead with host: %q", lines[0])
 		}
-		initialFollow := watchRow(lines, "FOLLOW")
-		if _, err := terminal.Write([]byte("]")); err != nil {
-			t.Fatal(err)
+		if watchRow(lines, "2 running") != 0 {
+			t.Errorf("fleet header omitted the session count: %q", lines[0])
 		}
-		split, ok := waitWatchScreen(capture, func(next []string) bool {
-			row := watchRow(next, "FOLLOW")
-			return row >= 0 && row < initialFollow
-		})
-		if !ok {
-			t.Fatalf("split key did not move stream viewport upward: before=%d after=%d", initialFollow, watchRow(split, "FOLLOW"))
+		if watchRow(lines, "slots 2/8") != 0 {
+			t.Errorf("fleet header omitted the host's session slots: %q", lines[0])
 		}
-		if _, err := terminal.Write([]byte("0")); err != nil {
-			t.Fatal(err)
-		}
-		reset, ok := waitWatchScreen(capture, func(next []string) bool { return watchRow(next, "FOLLOW") == initialFollow })
-		if !ok {
-			raw := capture.snapshot()
-			if len(raw) > 600 {
-				raw = raw[len(raw)-600:]
+		// The help line documents every key this step presses.
+		for _, key := range []string{"jk select", "enter detail", "[ ] split", "0 reset", "g tail", "q quit"} {
+			if !strings.Contains(lines[watchRows-1], key) {
+				t.Errorf("help line missing %q: %q", key, lines[watchRows-1])
 			}
-			t.Fatalf("split reset did not restore stream viewport: before=%d after=%d raw tail=%q", initialFollow, watchRow(reset, "FOLLOW"), raw)
 		}
-		if _, err := terminal.Write([]byte("j")); err != nil {
-			t.Fatal(err)
+		if !alpha.Selected() || !beta.Unselected() {
+			t.Fatalf("the first card should open selected, with a heavy frame and ▸ (corner %q marker %q), the second plain (corner %q marker %q)", alpha.Corner, alpha.Marker, beta.Corner, beta.Marker)
 		}
-		selected, ok := waitWatchScreen(capture, func(next []string) bool {
-			for _, line := range next[1:4] {
-				if col := strings.Index(line, "╭"); col > 20 {
-					return true
+
+		initial := watchPaneTitleRow(lines)
+		if initial < 0 {
+			t.Fatalf("fleet view has no stream title row: %q", lines)
+		}
+		press := func(key string) {
+			t.Helper()
+			if _, err := terminal.Write([]byte(key)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		waitPane := func(what string, ok func(row int) bool) {
+			t.Helper()
+			screen, found := waitWatchScreen(capture, func(next []string) bool {
+				row := watchPaneTitleRow(next)
+				return row >= 0 && ok(row)
+			})
+			if !found {
+				raw := capture.snapshot()
+				if len(raw) > 600 {
+					raw = raw[len(raw)-600:]
 				}
+				t.Fatalf("%s: stream title row is %d, was %d initially; raw tail=%q", what, watchPaneTitleRow(screen), initial, raw)
 			}
-			return false
-		})
-		if !ok {
-			t.Fatalf("selection border did not move to second card: %q", selected[1:4])
+		}
+		// ] gives the grid more rows, so the stream title moves down; [ moves
+		// it up; 0 restores the default split.
+		press("]")
+		waitPane("split key did not move the stream pane down", func(row int) bool { return row > initial })
+		press("0")
+		waitPane("split reset did not restore the stream pane", func(row int) bool { return row == initial })
+		press("[")
+		waitPane("split key did not move the stream pane up", func(row int) bool { return row < initial })
+		press("0")
+		waitPane("split reset did not restore the stream pane", func(row int) bool { return row == initial })
+
+		press("j")
+		var movedA, movedB watchCardView
+		if screen, ok := waitWatchScreen(capture, func(next []string) bool {
+			var foundA, foundB bool
+			movedA, foundA = watchCardAt(next, issueA)
+			movedB, foundB = watchCardAt(next, issueB)
+			return foundA && foundB && movedA.Unselected() && movedB.Selected()
+		}); !ok {
+			t.Fatalf("heavy frame and ▸ did not move to the second card: %q", screen[1:4])
+		}
+		// Selection changes the frame, never a card's place.
+		if movedA.Row != alpha.Row || movedA.Col != alpha.Col || movedB.Row != beta.Row || movedB.Col != beta.Col {
+			t.Errorf("selection moved a card: alpha (%d,%d)->(%d,%d) beta (%d,%d)->(%d,%d)", alpha.Row, alpha.Col, movedA.Row, movedA.Col, beta.Row, beta.Col, movedB.Row, movedB.Col)
 		}
 		quit()
 	})
