@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -114,7 +115,15 @@ func TestHostWatchObservedTelemetryFromJournal(t *testing.T) {
 	}))
 	defer server.Close()
 
-	watchCard := func() string {
+	// The piped card is five rows: identity, repository and work type, model
+	// and harness, state with elapsed time (and turns and cost once reported),
+	// and the last activity. Everything else is in the session's detail pane,
+	// which the pipe does not render, so the same phases are read in a PTY.
+	var (
+		turnsReported = regexp.MustCompile(`· (\d+) turns`)
+		costReported  = regexp.MustCompile(`· (\$\d+\.\d\d)`)
+	)
+	watchCard := func() [watchCardRows]string {
 		t.Helper()
 		mu.Lock()
 		before := sessionPolls
@@ -134,32 +143,51 @@ func TestHostWatchObservedTelemetryFromJournal(t *testing.T) {
 		if polls < 2 {
 			t.Fatalf("plain host-watch made %d index polls; need two refreshes: %s", polls, raw)
 		}
-		text := string(raw)
-		marker := strings.LastIndex(text, "OBSERVED-1")
-		if marker < 0 {
-			t.Fatalf("actual CLI did not render session card: %s", text)
+		card, ok := watchPlainCard(string(raw), "OBSERVED-1")
+		if !ok {
+			t.Fatalf("actual CLI did not render session card: %s", raw)
 		}
-		card := text[marker:]
-		if end := strings.Index(card, "session stream"); end >= 0 {
-			card = card[:end]
+		if card[1] != "project · work type unknown" || card[2] != "muse-spark-1.3 · pi" || !strings.HasPrefix(card[3], "running") {
+			t.Fatalf("plain card lost its repository, model/harness or state row: %q", card)
 		}
 		return card
 	}
-	require := func(card string, wants ...string) {
+	// Turns and cost appear on the state row only once reported, never as zero.
+	requireCounts := func(card [watchCardRows]string, turns, cost string) {
 		t.Helper()
-		for _, want := range wants {
-			if !strings.Contains(card, want) {
-				t.Fatalf("current plain card missing %q: %s", want, card)
-			}
+		var gotTurns, gotCost string
+		if m := turnsReported.FindStringSubmatch(card[3]); m != nil {
+			gotTurns = m[1]
 		}
+		if m := costReported.FindStringSubmatch(card[3]); m != nil {
+			gotCost = m[1]
+		}
+		if gotTurns != turns || gotCost != cost {
+			t.Fatalf("state row %q reports turns %q cost %q, want turns %q cost %q (empty means not reported)", card[3], gotTurns, gotCost, turns, cost)
+		}
+	}
+	watchDetail := func(want ...watchField) []string {
+		t.Helper()
+		terminal, capture, quit := startWatchPTY(t, binary, root, home, server.URL, watchColumns, "--all")
+		waitWatchCard(t, capture, "OBSERVED-1")
+		if _, err := terminal.Write([]byte("\r")); err != nil {
+			t.Fatal(err)
+		}
+		lines := waitWatchDetail(t, capture, func() []string { return watchScreen(capture.snapshot(), capture.columns) }, "OBSERVED-1", want...)
+		quit()
+		return lines
+	}
+	heartbeat := func(lines []string) string {
+		value, _ := watchDetailValue(lines, "Heartbeat")
+		return value
 	}
 
 	initial := watchCard()
-	require(initial, "Model author meta", "Endpoint operator gateway", "Endpoint surface openai",
-		"Protocol openai-chat", "Actual provider unknown", "cost not reported", "turns not reported")
-	if strings.Contains(initial, "heartbeat never") || strings.Contains(initial, "Actual provider meta") ||
-		strings.Contains(initial, "Actual provider openai") {
-		t.Fatalf("state heartbeat or actual-provider distinction lost: %s", initial)
+	requireCounts(initial, "", "")
+	detail := watchDetail(field("Model author", "meta"), field("Endpoint operator", "gateway"), field("Endpoint surface", "openai"),
+		field("Protocol", "openai-chat"), field("Actual provider", "unknown"), field("Cost", "not reported"), field("Turns", "not reported"))
+	if got := heartbeat(detail); got == "never" || !strings.HasSuffix(got, " ago") {
+		t.Fatalf("state heartbeat lost: Heartbeat = %q", got)
 	}
 
 	// A provider-reported zero price need not imply a completed turn.
@@ -167,16 +195,16 @@ func TestHostWatchObservedTelemetryFromJournal(t *testing.T) {
 		"kind":        "llm_call", // local journal observation with optional span upload disabled
 		"usageSource": "provider", "observedCostUsd": 0, "turnCompleted": false,
 	})
-	zero := watchCard()
-	require(zero, "cost $0.00", "turns not reported", "Actual provider unknown")
+	requireCounts(watchCard(), "", "$0.00")
+	watchDetail(field("Cost", "$0.00"), field("Turns", "not reported"), field("Actual provider", "unknown"))
 
 	// A native completed turn can independently lack a cost observation.
 	appendEvent(map[string]any{
 		"kind": "llm_call", "spanId": "1000000000000002",
 		"usageSource": "provider", "turnCompleted": true,
 	})
-	turn := watchCard()
-	require(turn, "cost $0.00", "turns 1", "Actual provider unknown")
+	requireCounts(watchCard(), "1", "$0.00")
+	watchDetail(field("Cost", "$0.00"), field("Turns", "1"), field("Actual provider", "unknown"))
 
 	// Duplicate correlated calls count once; terminal cumulative values
 	// replace the provisional live sum rather than adding to it.
@@ -186,33 +214,28 @@ func TestHostWatchObservedTelemetryFromJournal(t *testing.T) {
 	}
 	appendEvent(call)
 	appendEvent(call)
-	live := watchCard()
-	require(live, "cost $0.50", "turns 2")
+	requireCounts(watchCard(), "2", "$0.50")
 	appendEvent(map[string]any{
 		"kind": "result", "success": true,
 		"observedCostUsd": 0.25, "observedTurns": 2,
 	})
-	late := watchCard() // new CLI process attaches after the terminal row
-	require(late, "cost $0.25", "turns 2")
-	if strings.Contains(late, "cost $0.75") || strings.Contains(late, "turns 4") {
-		t.Fatalf("terminal aggregate inflated live observations: %s", late)
-	}
+	// A new CLI process attaches after the terminal row. Exact counts also
+	// prove the aggregate did not inflate the live observations to $0.75 / 4.
+	requireCounts(watchCard(), "2", "$0.25")
 
 	info, err := os.Stat(journal)
 	if err != nil {
 		t.Fatal(err)
 	}
 	writeState(time.Now().UnixMilli(), info.Size(), 0) // same path and ID, new run
-	reset := watchCard()
-	require(reset, "cost not reported", "turns not reported", "heartbeat never", "Actual provider unknown")
-	if strings.Contains(reset, "cost $0.25") || strings.Contains(reset, "turns 2") {
-		t.Fatalf("new run inherited old journal metrics: %s", reset)
-	}
+	// A new run inherits nothing: no counts from the old journal, no heartbeat.
+	requireCounts(watchCard(), "", "")
+	watchDetail(field("Cost", "not reported"), field("Turns", "not reported"), field("Heartbeat", "never"), field("Actual provider", "unknown"))
 	appendEvent(map[string]any{
 		"kind": "llm_call", "spanId": "2000000000000001",
 		"usageSource": "provider", "observedCostUsd": 0, "turnCompleted": true,
 	})
-	fresh := watchCard()
-	require(fresh, "cost $0.00", "turns 1", "heartbeat never")
-	afh.RecordLive(t.Name(), afh.LiveExercised, "compiled plain host-watch read local daemon index, fenced journal and state across live, terminal, late-attach and reused-run phases")
+	requireCounts(watchCard(), "1", "$0.00")
+	watchDetail(field("Cost", "$0.00"), field("Turns", "1"), field("Heartbeat", "never"))
+	afh.RecordLive(t.Name(), afh.LiveExercised, "compiled host-watch read local daemon index, fenced journal and state across live, terminal, late-attach and reused-run phases, as piped cards and detail panes")
 }

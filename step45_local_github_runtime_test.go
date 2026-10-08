@@ -1136,12 +1136,21 @@ func TestLocalGitHubWholeRuntime(t *testing.T) {
 	watch.Env = env
 	watchRaw, _ := watch.CombinedOutput()
 	watchCancel()
-	// Plain cards render the actual state-derived issue identifier, not the
-	// full session ID. Full identity remains bound above to index and state.
-	for _, identity := range []string{liveState.IssueIdentifier, "project example/project", "harness " + liveState.Harness, "model " + liveState.Model, "state running"} {
-		if !strings.Contains(string(watchRaw), identity) {
-			t.Fatalf("actual piped hostwatch omitted bound identity %q: %s", identity, watchRaw)
-		}
+	// A plain card is five rows: the actual state-derived issue identifier
+	// (not the full session ID), the repository's short name and work type,
+	// model and harness, and the state. Full identity remains bound above to
+	// index and state. The model shows as requested, as a dated snapshot of it
+	// or as "requested → observed", so only its start and the harness are fixed.
+	card, found := watchPlainCard(string(watchRaw), liveState.IssueIdentifier)
+	if !found {
+		t.Fatalf("actual piped hostwatch omitted bound issue %q: %s", liveState.IssueIdentifier, watchRaw)
+	}
+	workType := "work type unknown"
+	if reported, _ := rows[0]["workType"].(string); reported != "" {
+		workType = reported
+	}
+	if card[1] != "project · "+workType || !strings.HasPrefix(card[2], liveState.Model) || !strings.HasSuffix(card[2], " · "+liveState.Harness) || !strings.HasPrefix(card[3], "running") {
+		t.Fatalf("actual piped hostwatch card does not carry the bound identity (want project · %s, %s · %s, running): %q", workType, liveState.Model, liveState.Harness, card)
 	}
 	if err = os.WriteFile(filepath.Join(root, "release-native"), []byte("release\n"), 0o600); err != nil {
 		t.Fatal(err)
