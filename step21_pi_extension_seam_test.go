@@ -481,23 +481,33 @@ func hasEnvLineStep21(env, want string) bool {
 
 // writeEnvCapturePiShim writes a fake `pi` that answers --version (so
 // provider construction's version-pin probe succeeds) and otherwise dumps
-// its own environment to $DONMAI_SMOKES_ENV_CAPTURE and exits — never
-// speaking real RPC. This proves D4.3's env posture (PI_OFFLINE=1,
-// PI_SKIP_VERSION_CHECK=1 on every spawned pi child) without needing a real
-// pi/node at all.
-func writeEnvCapturePiShim(t *testing.T, dir string) {
+// its own environment to capturePath and exits — never speaking real RPC.
+// This proves D4.3's env posture (PI_OFFLINE=1, PI_SKIP_VERSION_CHECK=1 on
+// every spawned pi child) without needing a real pi/node at all.
+//
+// The capture path is written into the script itself, not handed over in an
+// environment variable: donmai builds the pi child's exec environment from
+// an allowlist, and every other session binding rides an owner-only file
+// that only the real pi's policy extension reads back. A variable set on
+// `agent run` therefore never reaches this shim's exec environment.
+func writeEnvCapturePiShim(t *testing.T, dir, capturePath string) {
 	t.Helper()
-	const script = `#!/bin/sh
+	script := `#!/bin/sh
 if [ "$1" = "--version" ]; then
   echo "0.80.10"
   exit 0
 fi
-env > "$DONMAI_SMOKES_ENV_CAPTURE"
+env > ` + shellSingleQuoteStep21(capturePath) + `
 exit 1
 `
 	if err := os.WriteFile(filepath.Join(dir, "pi"), []byte(script), 0o755); err != nil { //nolint:gosec // executable shim needs the exec bit.
 		t.Fatalf("write env-capture pi shim: %v", err)
 	}
+}
+
+// shellSingleQuoteStep21 quotes s as one POSIX shell word.
+func shellSingleQuoteStep21(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // writeMinimalPiVersionShim writes a fake `pi` that answers ONLY --version
@@ -536,6 +546,10 @@ exit 1
 // always runs (no external-tool gate), so it — together with
 // TestPiExtensionSeam_DecoratorSeam — keeps this suite from ever reporting
 // an all-skip run per donmai-smokes#30, even on a machine with no pi/node.
+//
+// It also proves the pi child's exec environment is allowlisted: a binding
+// set on `agent run` under a name pi does not need to start must stay out
+// of it (a same-user process listing can render that block).
 func TestPiExtensionSeam_OfflineEnvPosture(t *testing.T) {
 	afh.SkipIfShort(t, "end-to-end agent-run smoke")
 	afh.SkipIfKnob(t, afh.SkipLiveDaemonEnv, "operator opted out of live-process smokes")
@@ -548,12 +562,16 @@ func TestPiExtensionSeam_OfflineEnvPosture(t *testing.T) {
 	fixture := setupPiSeamFixture(t, binary, "offline-env", repository)
 
 	shimDir := t.TempDir()
-	writeEnvCapturePiShim(t, shimDir)
 	envCapture := filepath.Join(t.TempDir(), "env-capture.txt")
+	writeEnvCapturePiShim(t, shimDir, envCapture)
+
+	// A session binding pi does not need to start. It may reach the agent's
+	// tools through the policy extension, never the exec environment.
+	const bindingName, bindingValue = "SMOKE_TOOL_BINDING", "smoke-binding-value"
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	_, stderr, _ := fixture.run(t, ctx, map[string]string{"DONMAI_SMOKES_ENV_CAPTURE": envCapture}, shimDir)
+	_, stderr, _ := fixture.run(t, ctx, map[string]string{bindingName: bindingValue}, shimDir)
 
 	captured, err := os.ReadFile(envCapture)
 	if err != nil {
@@ -565,6 +583,9 @@ func TestPiExtensionSeam_OfflineEnvPosture(t *testing.T) {
 	}
 	if !hasEnvLineStep21(env, "PI_SKIP_VERSION_CHECK=1") {
 		t.Errorf("PI_SKIP_VERSION_CHECK=1 not present in the spawned pi child's env (ADR-2026-08-12 D4.3):\n%s", env)
+	}
+	if strings.Contains(env, bindingValue) {
+		t.Errorf("session binding %s reached the spawned pi child's exec environment; it must stay off the allowlisted exec env:\n%s", bindingName, env)
 	}
 }
 
