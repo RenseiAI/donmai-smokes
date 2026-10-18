@@ -19,12 +19,13 @@ package smokes
 // service path via `os.UserHomeDir()` (which honours HOME):
 //
 //   - launchd:  <home>/Library/LaunchAgents/dev.donmai.daemon.plist
-//   - systemd:  <home>/.config/systemd/user/rensei-daemon.service
+//   - systemd:  <home>/.config/systemd/user/donmai-daemon.service
 //
-// Audit-noted nit: the audit prompt enumerated the Linux unit
-// filename as `dev.rensei.daemon.service`, but the actual systemd
-// installer's `UnitFilename` (installer/systemd/installer.go:46-49)
-// is `rensei-daemon.service`. The smoke uses the actual filename.
+// The systemd unit takes the brand-neutral default name
+// (installer/systemd/installer.go: DefaultUnitName = "donmai-daemon",
+// matching the launchd label dev.donmai.daemon). Earlier builds wrote a
+// differently named unit, which install now migrates in place; the smoke
+// pins the current filename so a rename surfaces here.
 //
 // Skip-mode: honours `DONMAI_SMOKES_SKIP_INSTALLER=1` + `-short`,
 // matching step1-step5's pattern. Also skipped on non-darwin/linux
@@ -78,12 +79,12 @@ func TestAfDaemonInstallLifecycle(t *testing.T) {
 		// PlistPath = $HOME/Library/LaunchAgents/<label>.plist
 		servicePath = filepath.Join(fakeHome, "Library", "LaunchAgents", "dev.donmai.daemon.plist")
 	case "linux":
-		// installer/systemd/installer.go: UnitFilename = "rensei-daemon.service"
+		// installer/systemd/installer.go: UnitFilename = DefaultUnitName + ".service" = "donmai-daemon.service"
 		// User-scope dir = $HOME/.config/systemd/user (XDG_CONFIG_HOME unused
 		// by the installer — it builds the path from os.UserHomeDir() +
 		// ".config/systemd/user" directly per UserUnitDir(), so the env var
 		// is set defensively but not load-bearing).
-		servicePath = filepath.Join(fakeHome, ".config", "systemd", "user", "rensei-daemon.service")
+		servicePath = filepath.Join(fakeHome, ".config", "systemd", "user", "donmai-daemon.service")
 	}
 
 	// Hermetic env shared by install + uninstall invocations. PATH is
@@ -142,7 +143,7 @@ func TestAfDaemonInstallLifecycle(t *testing.T) {
 		// Read the unit file content; assert it references the donmai
 		// binary path + the `daemon run` subcommand. The registered
 		// service must invoke `<host-binary> daemon run`, not a
-		// separate rensei-daemon.
+		// separate legacy daemon binary.
 		content, err := os.ReadFile(servicePath) //nolint:gosec // hermetic test path
 		if err != nil {
 			t.Fatalf("read service file: %v", err)

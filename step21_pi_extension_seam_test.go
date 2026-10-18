@@ -278,6 +278,13 @@ type piSeamFixture struct {
 	wtParent   string
 	home       string
 	fakeBinDir string
+	// preserveWorktree passes --preserve-worktree so a FAILED session's
+	// workarea stays on disk for post-run inspection. donmai tears a failed
+	// session's worktree down by default (once its unpublished work is
+	// archived to the rescue directory), so a smoke that asserts on files
+	// materialized inside the workarea of a run that is expected to fail
+	// must opt back in, exactly as an operator doing a post-mortem would.
+	preserveWorktree bool
 }
 
 func setupPiSeamFixture(t *testing.T, binary, testName, repository string) *piSeamFixture {
@@ -334,13 +341,17 @@ func setupPiSeamFixture(t *testing.T, binary, testName, repository string) *piSe
 func (f *piSeamFixture) run(t *testing.T, ctx context.Context, extraEnv map[string]string, pathDirs ...string) (stdout, stderr string, runErr error) {
 	t.Helper()
 
-	// nolint:gosec // G204: binary + flags are test-controlled.
-	cmd := exec.CommandContext(ctx, f.binary,
+	args := []string{
 		"agent", "run",
 		"--session-id", f.sessionID,
 		"--daemon-url", f.daemonSrv.URL,
 		"--worktree-dir", f.wtParent,
-	)
+	}
+	if f.preserveWorktree {
+		args = append(args, "--preserve-worktree")
+	}
+	// nolint:gosec // G204: binary + flags are test-controlled.
+	cmd := exec.CommandContext(ctx, f.binary, args...)
 	entries := append([]string{f.fakeBinDir}, pathDirs...)
 	if nd := nodeBinDir(); nd != "" {
 		entries = append(entries, nd)
@@ -651,6 +662,10 @@ func TestPiExtensionSeam_DecoratorSeam(t *testing.T) {
 	t.Run("MaterializedArtifactProvesDecoratorPassthrough", func(t *testing.T) {
 		repository := afh.MakeBareFixtureRepo(t, "pi-seam-decorator-passthrough-repo")
 		fixture := setupPiSeamFixture(t, embedder, "decorator-passthrough", repository)
+		// The run fails after materialization (the fake pi never completes
+		// a handshake); keep its workarea so the materialized delivery can
+		// be found and byte-compared below.
+		fixture.preserveWorktree = true
 
 		body := []byte("// smoke-decorator-passthrough marker\nexport default function activate(pi) {}\n")
 		sourceFile := writeTempFileStep21(t, "passthrough.ts", body)
