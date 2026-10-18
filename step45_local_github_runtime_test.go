@@ -302,9 +302,12 @@ func profileSetup(t *testing.T, binary, root string, env []string, rerun bool) s
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 25*time.Second)
 	defer cancel()
-	answers := []string{"profile-fixture", "private", "y", "1", "256", "1", "y", "2", "y", "1", "example/project", "work-ready", "release/next", "y", "", "manual", "3"}
+	// The trailing "y", "n" answer the [5/6] Continue? and the [6/6]
+	// default-no anonymous usage count question; the rerun keeps both
+	// defaults (continue, and the earlier decline).
+	answers := []string{"profile-fixture", "private", "y", "1", "256", "1", "y", "2", "y", "1", "example/project", "work-ready", "release/next", "y", "", "manual", "3", "y", "n"}
 	if rerun {
-		answers = []string{"", "", "y", "", "", "", "y", "", "y", "", "", "", "", "y", "", "", ""}
+		answers = []string{"", "", "y", "", "", "", "y", "", "y", "", "", "", "", "y", "", "", "", "y", ""}
 	}
 	// Linux script supplies a real PTY; no wizard override or hand-written config.
 	command := "exec '" + strings.ReplaceAll(binary, "'", "'\\''") + "' host setup"

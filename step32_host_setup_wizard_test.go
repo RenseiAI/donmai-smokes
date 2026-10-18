@@ -43,6 +43,10 @@ var hostSetupPrompts = []wizardPrompt{
 	{"Channel (stable/beta/main)", "stable"},
 	{"Schedule (nightly/on-release/manual)", "manual"},
 	{"Drain timeout seconds", "120"},
+	{"Continue? [Y/n]", "y"},
+	// [6/6] Anonymous usage count: the wizard's one default-no question.
+	// Declining must leave no usage-count block in the written config.
+	{"Count this installation? [y/N]", "n"},
 }
 
 type wizardPTYOutput struct {
@@ -281,6 +285,9 @@ func TestHostSetupWizardGuidance(t *testing.T) {
 	}
 	if strings.Contains(string(data), "authToken:") {
 		t.Errorf("local queue config unexpectedly contains registration token")
+	}
+	if strings.Contains(string(data), "usagePing:") || strings.Contains(string(data), "installationId:") {
+		t.Errorf("declined anonymous usage count still wrote a usage-count block (consent or installation id)\n%s", data)
 	}
 	var local struct {
 		LocalRuntime struct {
