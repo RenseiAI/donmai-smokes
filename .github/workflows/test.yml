@@ -103,6 +103,17 @@ jobs:
           cache: true
           cache-dependency-path: donmai-smokes/go.mod
 
+      # The donmai binary under test probes `go env GOMODCACHE` from the
+      # smokes working directory under a scrubbed environment (no
+      # GOTOOLCHAIN, PATH limited to /usr/bin:/bin). If /usr/bin/go is the
+      # runner image's older Go, it auto-downloads this module's pinned
+      # toolchain into the test's temp HOME as read-only files, which makes
+      # every such test fail in TempDir cleanup. Point /usr/bin/go at the
+      # setup-go toolchain so the pinned version is already local.
+      - name: Make the pinned Go the system Go (Linux)
+        if: runner.os == 'Linux'
+        run: sudo ln -sf "$(command -v go)" /usr/bin/go && /usr/bin/go version
+
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
