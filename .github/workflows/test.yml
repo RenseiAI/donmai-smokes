@@ -95,13 +95,24 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          # The smokes module (go 1.25.12, requires donmai v0.54.0) AND the
+          # The smokes module (go 1.26.10) AND the
           # sibling donmai build both need a modern toolchain; sourcing it from
           # go.mod avoids a per-run GOTOOLCHAIN auto-download of the pinned
           # version and keeps CI's Go in lockstep with the module.
           go-version-file: donmai-smokes/go.mod
           cache: true
           cache-dependency-path: donmai-smokes/go.mod
+
+      # The donmai binary under test probes `go env GOMODCACHE` from the
+      # smokes working directory under a scrubbed environment (no
+      # GOTOOLCHAIN, PATH limited to /usr/bin:/bin). If /usr/bin/go is the
+      # runner image's older Go, it auto-downloads this module's pinned
+      # toolchain into the test's temp HOME as read-only files, which makes
+      # every such test fail in TempDir cleanup. Point /usr/bin/go at the
+      # setup-go toolchain so the pinned version is already local.
+      - name: Make the pinned Go the system Go (Linux)
+        if: runner.os == 'Linux'
+        run: sudo ln -sf "$(command -v go)" /usr/bin/go && /usr/bin/go version
 
       - uses: actions/setup-python@v7
         with:
@@ -284,8 +295,8 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           # Was a hardcoded "1.23", which made every lint run download Go
-          # 1.23.12 (~7s) and then immediately download go1.25.12 again as a
-          # GOTOOLCHAIN, because this module declares `go 1.25.12` — two
+          # 1.23.12 (~7s) and then immediately download go1.26.10 again as a
+          # GOTOOLCHAIN, because this module declares `go 1.26.10` — two
           # toolchain fetches to lint with one. Sourcing from go.mod (same fix
           # the test job above already documents) fetches once and keeps lint's
           # Go in lockstep with the module instead of drifting on every bump.
