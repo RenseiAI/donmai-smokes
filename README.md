@@ -82,7 +82,7 @@ The sibling checkout is located by walking up from the working directory and ide
 
 - **Module**: `github.com/RenseiAI/donmai-smokes`. Public, OSS-licensed.
 - **Module dep**: tracks `github.com/RenseiAI/donmai` at v0.7.0 minimum (the Wave 9 release that locked the four daemon-targeted command surfaces and the `/api/daemon/*` HTTP control API).
-- **Go version**: 1.25.9 (matches `donmai`).
+- **Go version**: 1.26.10 (matches `donmai`).
 - **Testing**: stdlib `testing` + table-driven tests. No `testify`. `httptest` for HTTP fixtures. Same testing discipline as `donmai` declares in its `AGENTS.md` § "Conventions".
 - **GOWORK behavior**: `GOWORK=off` for the `make test` target. When this harness builds the `donmai` binary from a sibling `donmai` checkout via subprocess, the build subprocess gets `GOWORK=` (cleared) so it resolves `donmai`'s own `go.mod`/`go.sum` rather than the org root's `go.work`. The harness itself runs with `GOWORK=off` so tests don't accidentally pull in the workspace's other modules.
 - **Linting**: `golangci-lint` with the same enabled checks as `donmai`.

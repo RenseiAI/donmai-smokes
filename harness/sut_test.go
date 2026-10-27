@@ -16,7 +16,7 @@ func writeFakeCheckout(t *testing.T, dir, modulePath string, withCmd bool) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir %s: %v", dir, err)
 	}
-	body := "module " + modulePath + "\n\ngo 1.25.12\n"
+	body := "module " + modulePath + "\n\ngo 1.26.10\n"
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(body), 0o600); err != nil {
 		t.Fatalf("write go.mod: %v", err)
 	}
@@ -216,11 +216,11 @@ func TestModulePathOf(t *testing.T) {
 	for _, tc := range []struct {
 		name, in, want string
 	}{
-		{"plain", "module github.com/RenseiAI/donmai\n\ngo 1.25.12\n", "github.com/RenseiAI/donmai"},
+		{"plain", "module github.com/RenseiAI/donmai\n\ngo 1.26.10\n", "github.com/RenseiAI/donmai"},
 		{"leading blank lines", "\n\n  module   example.com/x  \n", "example.com/x"},
 		{"trailing comment", "module example.com/x // pinned\n", "example.com/x"},
 		{"quoted", `module "example.com/x"` + "\n", "example.com/x"},
-		{"no module directive", "go 1.25.12\nrequire x v1.0.0\n", ""},
+		{"no module directive", "go 1.26.10\nrequire x v1.0.0\n", ""},
 		{"module-prefixed word is not a directive", "modulepath example.com/x\n", ""},
 		{"empty", "", ""},
 	} {
