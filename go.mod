@@ -8,8 +8,8 @@ go 1.26.10
 
 require (
 	github.com/RenseiAI/donmai v0.72.26
-	github.com/charmbracelet/x/ansi v0.11.7
-	github.com/charmbracelet/x/vt v0.0.0-20260712004152-b16d026a9d2e
+	github.com/charmbracelet/x/ansi v0.11.9
+	github.com/charmbracelet/x/vt v0.1.0
 	github.com/coder/websocket v1.8.15
 	github.com/creack/pty v1.1.24
 	github.com/joho/godotenv v1.5.1
@@ -79,8 +79,8 @@ require (
 	github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99 // indirect
 	github.com/kevinburke/ssh_config v1.2.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
-	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
-	github.com/mattn/go-runewidth v0.0.23 // indirect
+	github.com/lucasb-eyer/go-colorful v1.4.1 // indirect
+	github.com/mattn/go-runewidth v0.0.27 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/oklog/ulid/v2 v2.1.1 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
