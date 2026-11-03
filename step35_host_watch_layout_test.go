@@ -120,7 +120,7 @@ func watchFixtureColumns(host, scope string) int {
 	if scope != "" {
 		identityColumns += len(" · " + scope)
 	}
-	counterColumns := len("1 running   queue 0   slots 2/8   uptime 1m 30s   v0.72.26")
+	counterColumns := len("1 running   queue 0   cap 2 / 8   uptime 1m 30s   v0.72.26")
 	const paddingAndGap = 3 // one padding cell per side and one gap
 	return max(watchColumns, identityColumns+counterColumns+paddingAndGap)
 }
@@ -431,13 +431,22 @@ func TestHostWatchLayoutFromCompiledCLI(t *testing.T) {
 		if watchRow(lines, "2 running") != 0 {
 			t.Errorf("fleet header omitted the session count: %q", lines[0])
 		}
-		if watchRow(lines, "slots 2/8") != 0 {
-			t.Errorf("fleet header omitted the host's session slots: %q", lines[0])
+		// The host's session slots render as the capacity strip: host active
+		// sessions over its maximum.
+		if watchRow(lines, "cap 2 / 8") != 0 {
+			t.Errorf("fleet header omitted the host's session slots (capacity strip \"cap 2 / 8\"): %q", lines[0])
 		}
-		// The help line documents every key this step presses.
-		for _, key := range []string{"jk select", "enter detail", "[ ] split", "0 reset", "g tail", "q quit"} {
-			if !strings.Contains(lines[watchRows-1], key) {
-				t.Errorf("help line missing %q: %q", key, lines[watchRows-1])
+		// The footer is one line truncated to the terminal width. It always
+		// leads with the "? help" anchor, and the "?" overlay lists every
+		// control, including the ones the footer drops at this width. The
+		// selection and split keys this step presses fit in the footer.
+		footer := lines[watchRows-1]
+		if !strings.HasPrefix(strings.TrimSpace(footer), "? help") {
+			t.Errorf("help line does not lead with the \"? help\" anchor: %q", footer)
+		}
+		for _, key := range []string{"jk select", "enter detail", "[ ] split", "0 reset"} {
+			if !strings.Contains(footer, key) {
+				t.Errorf("help line missing %q: %q", key, footer)
 			}
 		}
 		if !alpha.Selected() || !beta.Unselected() {
@@ -468,6 +477,30 @@ func TestHostWatchLayoutFromCompiledCLI(t *testing.T) {
 				t.Fatalf("%s: stream title row is %d, was %d initially; raw tail=%q", what, watchPaneTitleRow(screen), initial, raw)
 			}
 		}
+		// "?" opens the keyboard help overlay. It documents every key this step
+		// presses, quit included, and the tail key the footer drops at this
+		// width; "?" again closes it and leaves the layout as it was.
+		press("?")
+		help, opened := waitWatchScreen(capture, func(next []string) bool {
+			return watchRow(next, "keyboard help") >= 0
+		})
+		if !opened {
+			t.Fatalf("? did not open the keyboard help overlay: %q", help)
+		}
+		for _, control := range []string{
+			"select a session card",
+			"show the selected session detail",
+			"move the cards/stream split",
+			"reset the split to 50/50",
+			"jump to the stream tail",
+			"quit the dashboard (sessions keep running)",
+		} {
+			if watchRow(help, control) < 0 {
+				t.Errorf("keyboard help overlay missing %q: %q", control, help)
+			}
+		}
+		press("?")
+		waitPane("closing the keyboard help did not restore the stream pane", func(row int) bool { return row == initial })
 		// ] gives the grid more rows, so the stream title moves down; [ moves
 		// it up; 0 restores the default split.
 		press("]")
