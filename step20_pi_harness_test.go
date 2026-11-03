@@ -411,11 +411,16 @@ func piResolvedProfile() map[string]any {
 // items step20's real-binary lane specifically owns: assistant round trip
 // (item 3) and provider-pin lockout (item 9) from
 // runs/2026-07-21-open-harness-strategy/09-design-pi-adapter.md §8.
+//
+// Like step19's gatewayResolvedProfile it carries a top-level contextWindow:
+// a gateway-served pi cell with no configured window is refused at spawn
+// (see gatewayContextWindowTokens), so without it no turn could start.
 func piCompletedTurnResolvedProfile(model string) map[string]any {
 	return map[string]any{
-		"provider":    "pi",
-		"model":       model,
-		"servingHost": "gateway",
+		"provider":      "pi",
+		"model":         model,
+		"servingHost":   "gateway",
+		"contextWindow": gatewayContextWindowTokens,
 	}
 }
 

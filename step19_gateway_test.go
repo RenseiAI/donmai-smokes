@@ -277,15 +277,28 @@ func (up *gatewayUpstream) writeStream(w http.ResponseWriter, model string) {
 	}
 }
 
+// gatewayContextWindowTokens is the context window the gateway fixtures'
+// resolved profile carries. A gateway-served pi model registers through the
+// injected provider, which has no catalog entry to read a window from, so
+// donmai refuses the spawn when the dispatch configures none — it applies no
+// default (provider/harness/pi requireContextWindow). The control plane stamps
+// the window as the resolvedProfile's top-level contextWindow; `donmai agent
+// run` folds it into the runner's ProviderConfig["contextWindow"], and pi's
+// policy extension registers the model with it. Any positive window satisfies
+// that contract: the local upstream never enforces one.
+const gatewayContextWindowTokens = 400_000
+
 // gatewayResolvedProfile is the pi profile with servingHost="gateway" — the ONLY
-// signal the worker needs to bind a gateway session. Note what is deliberately
+// signal the worker needs to bind a gateway session — plus the context window
+// every gateway-served cell must be configured with. Note what is deliberately
 // absent: no endpoint, no base URL, no token. The worker generates all three
 // locally, which is why no dispatch payload can point a harness anywhere.
 func gatewayResolvedProfile(model string) map[string]any {
 	return map[string]any{
-		"provider":    "pi",
-		"model":       model,
-		"servingHost": "gateway",
+		"provider":      "pi",
+		"model":         model,
+		"servingHost":   "gateway",
+		"contextWindow": gatewayContextWindowTokens,
 	}
 }
 
