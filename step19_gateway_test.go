@@ -395,7 +395,7 @@ func setupGatewayFixture(t *testing.T, testName string, resolvedProfile map[stri
 		daemonSrv:    srv,
 		sessionID:    sessionID,
 		wtParent:     t.TempDir(),
-		home:         t.TempDir(),
+		home:         removableTempDir(t),
 		fakeBinDir:   fakeBinDir,
 		nodeDir:      nodeBinDir(),
 	}
