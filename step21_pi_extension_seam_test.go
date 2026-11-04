@@ -327,7 +327,7 @@ func setupPiSeamFixture(t *testing.T, binary, testName, repository string) *piSe
 		daemonSrv:  srv,
 		sessionID:  sessionID,
 		wtParent:   t.TempDir(),
-		home:       t.TempDir(),
+		home:       removableTempDir(t),
 		fakeBinDir: fakeBinDir,
 	}
 }

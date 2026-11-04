@@ -292,7 +292,7 @@ func setupPiHarnessFixture(t *testing.T, testName string, resolvedProfile map[st
 	t.Cleanup(srv.Close)
 
 	wtParent := t.TempDir()
-	home := t.TempDir()
+	home := removableTempDir(t)
 	fakeBinDir := t.TempDir()
 	writeBackstopGhShimStep20(t, fakeBinDir)
 

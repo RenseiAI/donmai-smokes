@@ -196,7 +196,7 @@ func setupOpenCodeHarnessFixture(t *testing.T, testName string, resolvedProfile 
 	t.Cleanup(srv.Close)
 
 	wtParent := t.TempDir()
-	home := t.TempDir()
+	home := removableTempDir(t)
 	fakeBinDir := t.TempDir()
 	writeBackstopGhShimStep18(t, fakeBinDir)
 
