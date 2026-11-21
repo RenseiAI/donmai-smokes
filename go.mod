@@ -4,7 +4,7 @@ module github.com/RenseiAI/donmai-smokes
 // so this module can consume the immutable github.com/RenseiAI/donmai v0.72.25
 // release (go 1.26.6). A module's go directive must be >= the max of its
 // dependencies'.
-go 1.26.10
+go 1.26.11
 
 require (
 	github.com/RenseiAI/donmai v0.72.26
